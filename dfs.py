@@ -12,14 +12,31 @@ class Cell:
         self.visited = False
 
 
-def dfs(frontier_map, start, goal):
-    for cell in frontier_map.items():
-        cell.visited = True
-        
+def dfs(map):
+    frontier_cells = filter_frontier_cells(map)
+    visited_cells = set()
+    clusters = []
+
+    for cell in frontier_cells:
+        if cell not in visited_cells:
+            cluster = set()
+            explore_cluster(map, cell, cluster, visited_cells)
+            clusters.append(cluster)
+
+    return clusters
+
+def explore_cluster(map, cell, cluster, visited_cells):
+    visited_cells.add(cell)
+    cluster.add(cell)
+
+    neighbor_cells = get_neighbor_cells(map, cell)
+    for neighbor in neighbor_cells:
+        if neighbor not in visited_cells and neighbor.is_frontier:
+            explore_cluster(map, neighbor, cluster, visited_cells)
 
 
-def get_neighbor_cell(map, cell):
-    neighbor = []
+def get_neighbor_cells(map, cell):
+    neighbors = []
     x, y = cell.x, cell.y
     for delta_x, delta_y in [
         (-1, -1),
@@ -36,8 +53,8 @@ def get_neighbor_cell(map, cell):
 
         # check if frontier or in map
         if (nx, ny) in map and map[(nx, ny)].is_frontier:
-            neighbor.append(map[(nx, ny)])
-    return neighbor
+            neighbors.append(map[(nx, ny)])
+    return neighbors
 
 
 def filter_frontier_cells(map):
@@ -47,5 +64,5 @@ def filter_frontier_cells(map):
             frontier_cells.append(cell)
     return frontier_cells
 
-
+#Test in here
 example_map = [(), (), (), (), (), (), (), ()]
