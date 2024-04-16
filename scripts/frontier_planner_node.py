@@ -2,33 +2,45 @@
 
 import rospy
 from  nav_msgs.msg import Odometry, OccupancyGrid, GridCells
-from geometry_msgs.msg import PoseWithCovarianceStamped, Point, Pose
+from geometry_msgs.msg import PoseWithCovarianceStamped, Point, Pose, Vector3, PoseStamped
 from visualization_msgs.msg import Marker
 import numpy as np
 import math
 from numpy import cos, sin
 from utils.state_validity_checker import StateValidityChecker
-
+import tf
 
 class FrontierPlanner:
     def __init__(self, gridmap_topic, odom_topic):
         # Config Parameters 
         self.update_interval = 1 # update frontiers every x seconds
+        self.distance_bias = 5
+        self.frontiers_bias = 2.0
+        self.distance_threshold = 0.3
         
         # Class Module
-        self.svc = StateValidityChecker()
+        self.svc = StateValidityChecker(distance=0.15)
 
         # Class Parameters
         self.last_map_time = rospy.Time.now()
         self.current_gridmap = None
+        self.current_pose = None
+        self.nbvp = None
+        self.current_vp  = None
+        
 
         # PUBLISHER
         self.frontiers_pub = rospy.Publisher('~frontiers',GridCells,queue_size=1)
         self.viewpoints_pub = rospy.Publisher('~viewpoints',Marker,queue_size=1)
+        self.nbvp_pub = rospy.Publisher('~nbvp',Marker,queue_size=1)
+        self.goal_pub = rospy.Publisher('/move_base_simple/goal',PoseStamped,queue_size=1)
 
         # SUBSCRIBERS
+        self.odom_sub = rospy.Subscriber(odom_topic,Odometry, self.odom_cb) 
         self.gridmap_sub = rospy.Subscriber(gridmap_topic,OccupancyGrid, self.gridmap_cb) 
-        #self.odom_sub = rospy.Subscriber(odom_topic,Odometry, self.get_odom) 
+
+        rospy.Timer(rospy.Duration(2), self.executoion_loop)
+        
 
         
 
@@ -61,13 +73,33 @@ class FrontierPlanner:
             self.clusters = self.group_frontiers(frontiers_map, self.frontiers)
 
             # Find viewpoint (list of pose -- need svc)
-            self.viewpoints = self.find_viewpoint(self.clusters)
-            print(self.viewpoints)
+            self.viewpoints, self.viewpoints_score = self.find_viewpoint(self.clusters)
             # Find NBVP
-            self.goal = self.find_nbvp(self.viewpoints)
+            self.nbvp = self.find_nbvp(self.viewpoints, self.viewpoints_score)
 
             # Update visulization
             self.visualize()
+
+    def odom_cb(self,odom):
+        _, _, yaw = tf.transformations.euler_from_quaternion([odom.pose.pose.orientation.x, 
+                                                              odom.pose.pose.orientation.y,
+                                                              odom.pose.pose.orientation.z,
+                                                              odom.pose.pose.orientation.w])
+        x = odom.pose.pose.position.x 
+        y = odom.pose.pose.position.y
+        
+        self.current_pose = np.array([x,y,yaw])
+
+    def executoion_loop(self, _):
+        if self.nbvp and (self.current_vp == None or self.distance_to_viewpoint(self.current_vp) < self.distance_threshold):
+            self.current_vp = self.nbvp
+            
+            goal = PoseStamped()
+            goal.pose.position.x = self.current_vp[0]
+            goal.pose.position.y = self.current_vp[1]
+            self.goal_pub.publish(goal)
+
+
 
     ##################################################################
     #### Alogorithm Functions
@@ -133,14 +165,26 @@ class FrontierPlanner:
     
     def find_viewpoint(self, clusters):
         viewpoints = []
+        scores = []
         for c in clusters:
-            avg = np.mean(np.array(c), axis=0)
-            viewpoints.append([avg[0],avg[1]])
-        return viewpoints
+            centroid_idx = np.mean(np.array(c), axis=0)
+            centroid_pos = self.svc.__map_to_position__(centroid_idx)
+
+            if self.svc.is_valid(centroid_pos):
+                viewpoints.append([centroid_pos[0],centroid_pos[1]])
+
+                dis = self.distance_to_viewpoint(centroid_pos)
+                score = -self.distance_bias*dis + self.frontiers_bias*len(c)
+                scores.append(score)
+
+        return viewpoints, scores
     
-    def find_nbvp(self, viewpoints):
-        nbvp = viewpoints[0]
-        return nbvp
+    def find_nbvp(self, viewpoints, scores):
+        if viewpoints:
+            nbvp = viewpoints[np.argmax(scores)]
+            return nbvp
+        else:
+            return None
     
     ##################################################################
     #### Utility functions
@@ -148,6 +192,7 @@ class FrontierPlanner:
     def visualize(self):
         self.visualize_frontiers()
         self.visualize_viewpoints()
+        self.visualize_nbvp()
         
 
     def visualize_frontiers(self):
@@ -179,29 +224,49 @@ class FrontierPlanner:
         marker.id = 0  # Marker ID
         marker.type = Marker.SPHERE_LIST  # Type of marker (SPHERE_LIST)
         marker.action = Marker.ADD  # Action to take (ADD, DELETE, etc.)
-        marker.scale.x = 0.3  # Scale (diameter along x-axis)
-        marker.scale.y = 0.3  # Scale (diameter along y-axis)
-        marker.scale.z = 0.3  # Scale (diameter along z-axis)
+        marker.scale.x = 0.15  # Scale (diameter along x-axis)
+        marker.scale.y = 0.15  # Scale (diameter along y-axis)
+        marker.scale.z = 0.15  # Scale (diameter along z-axis)
         marker.color.a = 1.0  # Alpha (transparency)
-        marker.color.r = 1.0  # Red component
+        marker.color.r = 0.0  # Red component
         marker.color.g = 0.0  # Green component
-        marker.color.b = 0.0  # Blue component
+        marker.color.b = 1.0  # Blue component
         marker.lifetime = rospy.Duration()  # Marker lifetime (0 means forever)
         marker.pose = Pose()
 
         # Create some example sphere points
         sphere_points = []
         for i, vp in enumerate(self.viewpoints):
-            p = self.svc.__map_to_position__(vp)
             point = Point()
-            point.x = p[0]  # Example x-coordinate
-            point.y = p[1]  # Example y-coordinate
+            point.x = vp[0]  # Example x-coordinate
+            point.y = vp[1]  # Example y-coordinate
             point.z = 0.5  # Example z-coordinate
             sphere_points.append(point)
 
         marker.points = sphere_points
         self.viewpoints_pub.publish(marker)
 
+    def visualize_nbvp(self):
+        marker = Marker()
+        marker.header.frame_id = self.current_gridmap.header.frame_id
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "nbvp"
+        marker.id = 0
+        marker.type = Marker.ARROW
+        marker.action = Marker.ADD
+        marker.pose.position = Point(self.nbvp[0], self.nbvp[1], 0)
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+        marker.scale = Vector3(1.0, 0.1, 0.1)  # arrow dimensions (length, width, height)
+        marker.color.a = 1.0  # alpha
+        marker.color.r = 1.0  # red
+        marker.color.g = 0.0  # green
+        marker.color.b = 0.0  # blue
+
+
+        self.nbvp_pub.publish(marker)
     
 
     ##################################################################
@@ -243,6 +308,12 @@ class FrontierPlanner:
                 if 0 <= nx < map.shape[0] and 0 <= ny < map.shape[1]:
                     neighbors.append([nx, ny]) 
         return neighbors
+    
+    def distance_to_viewpoint(self,vp):
+        if vp:
+            return np.linalg.norm(self.current_pose[0:2] - np.array(vp))
+        else:
+            return 0
 
 
 if __name__ == '__main__':
