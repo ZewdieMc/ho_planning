@@ -15,7 +15,7 @@ class FrontierPlanner:
         # Config Parameters 
         self.update_interval = 1 # update frontiers every x seconds
         self.distance_bias = 5
-        self.frontiers_bias = 2.0
+        self.frontiers_bias = 5.0
         self.distance_threshold = 0.3
         
         # Class Module
@@ -24,7 +24,7 @@ class FrontierPlanner:
         # Class Parameters
         self.last_map_time = rospy.Time.now()
         self.current_gridmap = None
-        self.current_pose = None
+        self.current_pose = [0,0,0]
         self.nbvp = None
         self.current_vp  = None
         
@@ -98,6 +98,10 @@ class FrontierPlanner:
             goal.pose.position.x = self.current_vp[0]
             goal.pose.position.y = self.current_vp[1]
             self.goal_pub.publish(goal)
+
+        else:
+            rospy.loginfo("No valid viewpoint found")
+            rospy.loginfo("Current VP: {}".format(self.current_vp))
 
 
 
@@ -174,7 +178,7 @@ class FrontierPlanner:
                 viewpoints.append([centroid_pos[0],centroid_pos[1]])
 
                 dis = self.distance_to_viewpoint(centroid_pos)
-                score = -self.distance_bias*dis + self.frontiers_bias*len(c)
+                score = self.frontiers_bias*len(c) - self.distance_bias*dis
                 scores.append(score)
 
         return viewpoints, scores
@@ -247,26 +251,27 @@ class FrontierPlanner:
         self.viewpoints_pub.publish(marker)
 
     def visualize_nbvp(self):
-        marker = Marker()
-        marker.header.frame_id = self.current_gridmap.header.frame_id
-        marker.header.stamp = rospy.Time.now()
-        marker.ns = "nbvp"
-        marker.id = 0
-        marker.type = Marker.ARROW
-        marker.action = Marker.ADD
-        marker.pose.position = Point(self.nbvp[0], self.nbvp[1], 0)
-        marker.pose.orientation.x = 0.0
-        marker.pose.orientation.y = 0.0
-        marker.pose.orientation.z = 0.0
-        marker.pose.orientation.w = 1.0
-        marker.scale = Vector3(1.0, 0.1, 0.1)  # arrow dimensions (length, width, height)
-        marker.color.a = 1.0  # alpha
-        marker.color.r = 1.0  # red
-        marker.color.g = 0.0  # green
-        marker.color.b = 0.0  # blue
+        if self.nbvp:
+            marker = Marker()
+            marker.header.frame_id = self.current_gridmap.header.frame_id
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "nbvp"
+            marker.id = 0
+            marker.type = Marker.ARROW
+            marker.action = Marker.ADD
+            marker.pose.position = Point(self.nbvp[0], self.nbvp[1], 0)
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+            marker.scale = Vector3(1.0, 0.1, 0.1)  # arrow dimensions (length, width, height)
+            marker.color.a = 1.0  # alpha
+            marker.color.r = 1.0  # red
+            marker.color.g = 0.0  # green
+            marker.color.b = 0.0  # blue
 
 
-        self.nbvp_pub.publish(marker)
+            self.nbvp_pub.publish(marker)
     
 
     ##################################################################
