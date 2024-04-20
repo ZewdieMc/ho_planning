@@ -5,7 +5,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 
-class Planner:
+lass Planner:
     def __init__(self, state_validity_checker, max_iterations=10000, delta_q=2, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=5, time_limit= 5):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
@@ -14,7 +14,8 @@ class Planner:
         self.p_goal = p_goal
         self.dominion = dominion
         self.search_radius = search_radius
-
+        #goal checker
+        self.path_to_goal_found = False
         # Initialize nodes, parent, and cost lists
         self.nodes = []
         self.parent = []
@@ -36,12 +37,11 @@ class Planner:
             q_new = self.steer(q_near, q_rand)
 
             if self.state_validity_checker.is_valid(q_new) and self.state_validity_checker.check_path([q_near, q_new]):
-                print("..........")
                 neighbors = self.near(q_new)
                 min_cost = self.cost[near_idx] + np.linalg.norm(q_new - q_near)
                 min_idx = near_idx
 
-                # Find the node in the tree that can reach q_new with the lowest cost
+                # Connect along the minimum cost path
                 for i in neighbors:
                     new_cost = self.cost[i] + np.linalg.norm(q_new - self.nodes[i])
                     if self.state_validity_checker.check_path([self.nodes[i], q_new]) and new_cost < min_cost:
@@ -59,16 +59,21 @@ class Planner:
                         self.cost[i] = self.cost[-1] + np.linalg.norm(self.nodes[i] - q_new)
 
                 # Check if the goal can be reached
-                if np.linalg.norm(q_new - q_goal) < self.delta_q and self.state_validity_checker.check_path([q_new, q_goal]):
-                    self.nodes.append(q_goal)
-                    self.parent.append(len(self.nodes) - 2)
-                    self.cost.append(min_cost + np.linalg.norm(q_goal - q_new))
-                    raw_path = self.build_path(q_goal)
-                    smoothed_path = self.smooth_path(raw_path)
-                    return smoothed_path
+                # if np.linalg.norm(q_new - q_goal) < self.delta_q and self.state_validity_checker.check_path([q_new, q_goal]):
+                #     self.path_to_goal_found = True
+                #     self.nodes.append(q_goal)
+                #     self.parent.append(len(self.nodes) - 2)
+                #     self.cost.append(min_cost + np.linalg.norm(q_goal - q_new))
+                    # raw_path = self.build_path(q_goal)
+                    # smoothed_path = self.smooth_path(raw_path)
+                    # return smoothed_path, self.parent, self.nodes
             if time.time() - time_start > self.time_limit:
                 print("Time limit reached")
-                return [] #! No solution found within time limit, try with a higher time limit
+                # self.nodes.append(q_goal)
+                raw_path = self.build_path(q_goal)
+                smoothed_path = self.smooth_path(raw_path)
+                return smoothed_path, self.parent, self.nodes
+                # return [] #! No solution found within time limit, try with a higher time limit
         return []
     
 
@@ -121,7 +126,17 @@ class Planner:
     #* Build path from start to last_node
     def build_path(self, last_node):
         path = []
-        idx = len(self.nodes) - 1
+        idx = None
+
+        # Find the index of last_node in self.nodes
+        for i, node in enumerate(self.nodes):
+            if np.array_equal(node, last_node):
+                idx = i
+                break
+
+        # If last_node is not in self.nodes, idx will be None
+        if idx is None:
+            return []
 
         while idx != 0:
             path.append(self.nodes[idx])
@@ -129,3 +144,4 @@ class Planner:
 
         path.append(self.nodes[0])
         return path[::-1]
+    
