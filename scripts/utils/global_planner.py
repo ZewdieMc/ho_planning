@@ -5,7 +5,7 @@ import numpy as np
 from scipy.spatial import KDTree
 
 
-lass Planner:
+class Planner:
     def __init__(self, state_validity_checker, max_iterations=10000, delta_q=2, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=5, time_limit= 5):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
