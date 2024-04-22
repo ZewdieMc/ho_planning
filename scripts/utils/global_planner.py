@@ -115,7 +115,7 @@ class StateValidityChecker:
     
 # Class to implement the RRT* algorithm
 class Planner:
-    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=2, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 5):
+    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.2, dominion=[-5, 5, -5, 5], search_radius=3, time_limit= 3):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
         self.max_iterations = max_iterations
@@ -168,11 +168,12 @@ class Planner:
                         self.cost[i] = self.cost[-1] + np.linalg.norm(self.nodes[i] - q_new)
                         
             if time.time() - time_start > self.time_limit:
-                print("Time limit reached")
+                # print("Time limit reached")
                 # self.nodes.append(q_goal)
                 raw_path = self.build_path(q_goal)
                 smoothed_path = self.smooth_path(raw_path)
-                return smoothed_path, self.parent, self.nodes
+                if smoothed_path:
+                    return smoothed_path, self.parent, self.nodes
                 # return [] #! No solution found within time limit, try with a higher time limit
         return []
     
@@ -263,11 +264,6 @@ def compute_path(start_p, goal_p, state_validity_checker, bounds, max_time=1.0):
 # Controller: Given the current position and the goal position, this function computes the desired 
 # lineal velocity and angular velocity to be applied in order to reah the goal.
 def move_to_point(current, goal, Kv=0.5, Kw=0.5):
-    
-    # TODO: Use a proportional controller which sets a velocity command to move from current position to goal (u = Ke)
-    # To avoid strange curves, first correct the orientation and then the distance. 
-    # Hint: use wrap_angle function to maintain yaw in [-pi, pi]
-    # This function should return only  linear velocity (v) and angular velocity (w)
     d = ((goal[0] - current[0])**2 + (goal[1] - current[1])**2)**0.5
     psi_d = np.arctan2(goal[1] - current[1], goal[0] - current[0])
     psi = wrap_angle(psi_d - current[2])

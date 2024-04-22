@@ -73,7 +73,7 @@ class OnlinePlanner:
         # TIMERS
         # Timer for velocity controller
         rospy.Timer(rospy.Duration(0.1), self.controller)
-    
+
     # Odometry callback: Gets current robot pose and stores it into self.current_pose
     def get_odom(self, odom):
         _, _, yaw = tf.transformations.euler_from_quaternion([odom.pose.pose.orientation.x, 
@@ -108,11 +108,17 @@ class OnlinePlanner:
         if (gridmap.header.stamp - self.last_map_time).to_sec() > 1:            
             self.last_map_time = gridmap.header.stamp
 
+
             # Update State Validity Checker
             env = np.array(gridmap.data).reshape(gridmap.info.height, gridmap.info.width).T
             origin = [gridmap.info.origin.position.x, gridmap.info.origin.position.y]
             self.svc.set(env, gridmap.info.resolution, origin)
             #! self.frontiers = exploration.find_frontiers_conv(env)
+            map_height = self.svc.map.shape[0] * self.svc.resolution
+            map_width = self.svc.map.shape[1] * self.svc.resolution
+    
+            #max dimensions of the map
+            self.bounds = np.array([-map_width + 0.02 , map_width + 0.02 , -map_height + 0.02 , map_height + 0.02 ])
 
             #! centroids
             #! self.centroids, self.frontiers = exploration.cluster_frontiers(self.frontiers)
@@ -155,10 +161,10 @@ class OnlinePlanner:
         print("Compute new path")
         # TODO: plan a path from self.current_pose to self.goal
         self.path, parents, nodes = compute_path(self.current_pose[0:2], self.goal, self.svc, self.bounds, 1.0)
-        self.publish_nodes()
-        self.publish_edges()        
         self.nodes = nodes
         self.parent = parents
+        self.publish_nodes()
+        self.publish_edges()        
 
         if len(self.path) == 0:
             rospy.logerr("Path not found! Retrying for one more time")
@@ -382,7 +388,7 @@ class OnlinePlanner:
             point = Point()
             point.x = vp[0]  
             point.y = vp[1]  
-            point.z = 0.5  
+            point.z = 0  
             sphere_points.append(point)
 
         marker.points = sphere_points
@@ -410,6 +416,11 @@ class OnlinePlanner:
             marker.points.append(p2)
         self.edge_pub.publish(marker)
 
+    def visualize(self,a):
+        if self.nodes and self.parent:
+            self.publish_edges()
+            self.publish_nodes()
+            self.publish_path()
 
 # MAIN FUNCTION
 if __name__ == '__main__':
