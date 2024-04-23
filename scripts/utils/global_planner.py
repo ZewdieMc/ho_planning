@@ -168,13 +168,10 @@ class Planner:
                         self.cost[i] = self.cost[-1] + np.linalg.norm(self.nodes[i] - q_new)
                         
             if time.time() - time_start > self.time_limit:
-                # print("Time limit reached")
-                # self.nodes.append(q_goal)
                 raw_path = self.build_path(q_goal)
                 smoothed_path = self.smooth_path(raw_path)
-                if smoothed_path:
+                if len(smoothed_path) > 0:
                     return smoothed_path, self.parent, self.nodes
-                # return [] #! No solution found within time limit, try with a higher time limit
         return []
     
 
@@ -246,9 +243,9 @@ class Planner:
         path.append(self.nodes[0])
         return path[::-1]
     
-#! Planner: This function has to plan a path from start_p to goal_p. To check if a position is valid the 
-#! StateValidityChecker class has to be used. The planning dominion must be specified as well as the maximum planning time.
-#! The planner returns a path that is a list of poses ([x, y]).
+# Planner: This function has to plan a path from start_p to goal_p. To check if a position is valid the 
+# StateValidityChecker class has to be used. The planning dominion must be specified as well as the maximum planning time.
+# The planner returns a path that is a list of poses ([x, y]).
 def compute_path(start_p, goal_p, state_validity_checker, bounds, max_time=1.0):
 
     # TODO: Plan a path from start_p to goal_p inside bounds using the RRT and the StateValidityChecker Objects previously defined.
