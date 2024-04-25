@@ -9,6 +9,7 @@ import math
 from numpy import cos, sin
 from utils.state_validity_checker import StateValidityChecker
 import tf
+from exploration import find_frontiers_conv, cluster_frontiers
 
 class FrontierPlanner:
     def __init__(self, gridmap_topic, odom_topic):
@@ -16,10 +17,10 @@ class FrontierPlanner:
         self.update_interval = 1 # update frontiers every x seconds
         self.distance_bias = 5
         self.frontiers_bias = 5.0
-        self.distance_threshold = 0.3
+        self.distance_threshold = 0.01
         
         # Class Module
-        self.svc = StateValidityChecker(distance=0.15)
+        self.svc = StateValidityChecker(distance=0.2)
 
         # Class Parameters
         self.last_map_time = rospy.Time.now()
@@ -67,13 +68,19 @@ class FrontierPlanner:
             # Prepare gridmap
             grid_map = self.prepare_grid_map(data)
             # Detect frontiers cells
-            self.frontiers, frontiers_map = self.detect_frontiers(grid_map)
-                    
+            #! self.frontiers, frontiers_map = self.detect_frontiers(grid_map)
+            self.frontiers  = find_frontiers_conv(self.svc.map)
+
             # Clustering
-            self.clusters = self.group_frontiers(frontiers_map, self.frontiers)
+            self.clusters = self.group_frontiers(self.frontiers)
+
+            # self.clusters, self.centroids, frontiers_without_noise = cluster_frontiers(self.frontiers)
+            # self.frontiers = frontiers_without_noise
 
             # Find viewpoint (list of pose -- need svc)
             self.viewpoints, self.viewpoints_score = self.find_viewpoint(self.clusters)
+
+            
             # Find NBVP
             self.nbvp = self.find_nbvp(self.viewpoints, self.viewpoints_score)
 
@@ -100,9 +107,7 @@ class FrontierPlanner:
             self.goal_pub.publish(goal)
 
         else:
-            rospy.loginfo("No valid viewpoint found")
-            rospy.loginfo("Current VP: {}".format(self.current_vp))
-
+            pass
 
 
     ##################################################################
@@ -138,7 +143,10 @@ class FrontierPlanner:
         # Return the list of free cells in contact with unknown cells
         return frontiers, frontiers_map
     
-    def group_frontiers(self, map, frontiers):
+    def group_frontiers(self, frontiers):
+        map = np.zeros(self.svc.map.shape)
+        for f in frontiers:
+            map[f[0],f[1]] = 1 
         clusters = []
         visited_map = np.zeros(map.shape)
 
@@ -171,7 +179,7 @@ class FrontierPlanner:
         viewpoints = []
         scores = []
         for c in clusters:
-            centroid_idx = np.mean(np.array(c), axis=0)
+            centroid_idx = np.median(np.array(c), axis=0)
             centroid_pos = self.svc.__map_to_position__(centroid_idx)
 
             if self.svc.is_valid(centroid_pos):
@@ -196,6 +204,7 @@ class FrontierPlanner:
     def visualize(self):
         self.visualize_frontiers()
         self.visualize_viewpoints()
+        # self.publish_centroids()
         self.visualize_nbvp()
         
 
@@ -230,7 +239,7 @@ class FrontierPlanner:
         marker.action = Marker.ADD  # Action to take (ADD, DELETE, etc.)
         marker.scale.x = 0.15  # Scale (diameter along x-axis)
         marker.scale.y = 0.15  # Scale (diameter along y-axis)
-        marker.scale.z = 0.15  # Scale (diameter along z-axis)
+        marker.scale.z = 0.0  # Scale (diameter along z-axis)
         marker.color.a = 1.0  # Alpha (transparency)
         marker.color.r = 0.0  # Red component
         marker.color.g = 0.0  # Green component
@@ -244,12 +253,46 @@ class FrontierPlanner:
             point = Point()
             point.x = vp[0]  # Example x-coordinate
             point.y = vp[1]  # Example y-coordinate
-            point.z = 0.5  # Example z-coordinate
+            point.z = 0.0  # Example z-coordinate
             sphere_points.append(point)
 
         marker.points = sphere_points
         self.viewpoints_pub.publish(marker)
 
+    def publish_centroids(self):
+
+        marker = Marker()
+        marker.header.frame_id = self.current_gridmap.header.frame_id  # Marker's reference frame
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "viewpoint"  
+        marker.id = 0  # Marker ID
+        marker.type = Marker.SPHERE_LIST
+        marker.action = Marker.ADD  
+        marker.scale.x = 0.15  
+        marker.scale.y = 0.15  
+        marker.scale.z = 0.0 
+        marker.color.a = 1.0  
+        marker.color.r = 0.0 
+        marker.color.g = 0.0 
+        marker.color.b = 1.0 
+        marker.lifetime = rospy.Duration()  
+        marker.pose = Pose()
+
+        # Create sphere points
+        sphere_points = []
+        for i, vp in enumerate(self.centroids):
+            vp = self.svc.__map_to_position__(np.array(vp))
+            point = Point()
+            point.x = vp[0]  
+            point.y = vp[1]  
+            point.z = 0.0  
+            sphere_points.append(point)
+        marker.points = sphere_points
+        self.viewpoints_pub.publish(marker)
+
+    '''
+    publish the next best viewpoint
+    '''    
     def visualize_nbvp(self):
         if self.nbvp:
             marker = Marker()
