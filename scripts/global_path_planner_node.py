@@ -170,7 +170,7 @@ class OnlinePlanner:
         # Publish plan marker to visualize in rviz
         self.publish_path()
         # remove initial waypoint in the path (current pose is already reached)
-        del self.path[0]                 
+        # del self.path[0]                 
         
 
     # This method is called every 0.1s. It computes the velocity comands in order to reach the 
