@@ -21,6 +21,7 @@ class OnlinePlanner:
         # ATTRIBUTES
         # List of points which define the plan. None if there is no plan
         self.path = []
+        self.copy_path = []
         # State Validity Checker object                                                 
         self.svc = StateValidityChecker(distance_threshold)
         # Current robot SE2 pose [x, y, yaw], None if unknown            
@@ -116,10 +117,8 @@ class OnlinePlanner:
             #! self.frontiers = exploration.find_frontiers_conv(env)
             map_height = self.svc.map.shape[0] * self.svc.resolution
             map_width = self.svc.map.shape[1] * self.svc.resolution
-    
-            #max dimensions of the map
-            self.bounds = np.array([-map_width + 0.02 , map_width + 0.02 , -map_height + 0.02 , map_height + 0.02 ])
 
+            self.bounds = np.array([origin[0] - 0.5 , origin[0] + map_height + 0.5  , origin[1] - 0.5 , origin[1] + map_width + 0.5 ])
             #! centroids
             #! self.centroids, self.frontiers = exploration.cluster_frontiers(self.frontiers)
             # rospy.loginfo("Centroid Index: %d", len(self.frontiers))
@@ -156,50 +155,45 @@ class OnlinePlanner:
         # Check if robot is collided with an obstacle
         if self.robot_collided():
             rospy.logerr("Robot is collided with an obstacle")
-            self.back_off()
+            #!self.back_off()
 
-        print("Compute new path")
+        rospy.loginfo("Computing new path")
         # TODO: plan a path from self.current_pose to self.goal
         self.path, parents, nodes = compute_path(self.current_pose[0:2], self.goal, self.svc, self.bounds, 1.0)
+        self.copy_path = self.path.copy()
         self.nodes = nodes
         self.parent = parents
         self.publish_nodes()
         self.publish_edges()        
-
-        if len(self.path) == 0:
-            rospy.logerr("Path not found! Retrying for one more time")
-            self.path, parents, nodes = compute_path(self.current_pose[0:2], self.goal, self.svc, self.bounds, 1.0)
-            self.nodes = nodes
-            self.parent = parents
-            self.publish_nodes()
-            self.publish_edges()  
-        else:
-            rospy.loginfo("Path found")
-            # Publish plan marker to visualize in rviz
-            self.publish_path()
-            # remove initial waypoint in the path (current pose is already reached)
-            del self.path[0]                 
+        rospy.loginfo("Path found")
+        print("Path: ", self.path)
+        # Publish plan marker to visualize in rviz
+        self.publish_path()
+        # remove initial waypoint in the path (current pose is already reached)
+        del self.path[0]                 
         
 
     # This method is called every 0.1s. It computes the velocity comands in order to reach the 
     # next waypoint in the path. It also sends zero velocity commands if there is no active path.
+
     def controller(self, event):
         v = 0
         w = 0
         if len(self.path) > 0:
-            #if ... # TODO: If current waypoint is reached with some tolerance move to the next waypoint.
+            # TODO: If current waypoint is reached with some tolerance move to the next waypoint.
             if np.linalg.norm(self.current_pose[0:2] - self.path[0]) < 0.01:
                 # remove reached waypoint
+                print("Waypoint deleted!", self.path[0])
                 del self.path[0]
 
                 # If it was the last waypoint in the path show a message indicating it
                 if len(self.path) == 0:
                     print("Goal reached!") 
 
-            else: #! TODO: Compute velocities using controller function in utils_lib
+            else:
                 # move to the next waypoint in the path
+                print("velocity command to: ", self.path[0])
                 v, w = move_to_point(self.current_pose, self.path[0], self.Kv, self.Kw)                
-                
         # Publish velocity commands
         self.__send_commnd__(v, w)
     
@@ -225,7 +219,7 @@ class OnlinePlanner:
 
     # Publish a path as a series of line markers
     def publish_path(self):
-        if len(self.path) > 1:
+        if len(self.copy_path) > 1:
             print("Publish path!")
             m = Marker()
             m.header.frame_id = 'world_ned'
@@ -248,9 +242,9 @@ class OnlinePlanner:
             m.pose.orientation.w = 1
             
             color_red = ColorRGBA()
-            color_red.r = 0
-            color_red.g = 1
-            color_red.b = 0
+            color_red.r = 1
+            color_red.g = 0
+            color_red.b = 1
             color_red.a = 1
             color_blue = ColorRGBA()
             color_blue.r = 0
@@ -265,7 +259,7 @@ class OnlinePlanner:
             m.points.append(p)
             m.colors.append(color_blue)
             
-            for n in self.path:
+            for n in self.copy_path:
                 p = Point()
                 p.x = n[0]
                 p.y = n[1]
@@ -274,6 +268,8 @@ class OnlinePlanner:
                 m.colors.append(color_red)
             
             self.marker_pub.publish(m)
+        else:
+            print("No path to publish")
 
 
     def back_off(self):
@@ -355,7 +351,7 @@ class OnlinePlanner:
             point = Point()
             point.x = vp[0]  
             point.y = vp[1]  
-            point.z = 0.5  
+            point.z = 0.0  
             sphere_points.append(point)
 
         marker.points = sphere_points

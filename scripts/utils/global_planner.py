@@ -2,6 +2,7 @@ from ast import List
 import time
 import numpy as np
 from scipy.spatial import KDTree
+from collections import OrderedDict
 # from utils_lib.rrt import RRT
 
 def wrap_angle(angle):
@@ -85,6 +86,8 @@ class StateValidityChecker:
 
             # Calculate distance and direction of the segment
             dist = np.linalg.norm(end - start)
+            if dist == 0:
+                continue
             direction = (end - start) / dist
 
             if dist < step_size:
@@ -115,7 +118,7 @@ class StateValidityChecker:
     
 # Class to implement the RRT* algorithm
 class Planner:
-    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.2, dominion=[-5, 5, -5, 5], search_radius=3, time_limit= 3):
+    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 5):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
         self.max_iterations = max_iterations
@@ -129,6 +132,11 @@ class Planner:
         self.nodes = []
         self.parent = []
         self.cost = []
+
+
+        # iterations
+        self.iterations = 0
+
         
         # Time span for the planner
         self.time_limit = time_limit
@@ -141,12 +149,13 @@ class Planner:
         self.cost = [0]
 
         for _ in range(self.max_iterations):
+            self.iterations += 1
             q_rand = q_goal if np.random.rand() < self.p_goal else self.random_configuration()
             q_near, near_idx = self.nearest(q_rand)
             q_new = self.steer(q_near, q_rand)
 
             if self.state_validity_checker.is_valid(q_new) and self.state_validity_checker.check_path([q_near, q_new]):
-                neighbors = self.near(q_new)
+                neighbors = self.near(q_new, q_goal)
                 min_cost = self.cost[near_idx] + np.linalg.norm(q_new - q_near)
                 min_idx = near_idx
 
@@ -156,7 +165,8 @@ class Planner:
                     if self.state_validity_checker.check_path([self.nodes[i], q_new]) and new_cost < min_cost:
                         min_cost = new_cost 
                         min_idx = i
-
+                print(self.iterations)
+                print("nodes count: ", len(self.nodes))    
                 self.nodes.append(q_new)
                 self.parent.append(min_idx)
                 self.cost.append(min_cost)
@@ -172,15 +182,17 @@ class Planner:
                 smoothed_path = self.smooth_path(raw_path)
                 if len(smoothed_path) > 0:
                     return smoothed_path, self.parent, self.nodes
-        return []
-    
+                else:
+                    self.time_limit += 1
+        return [], [], []
 
     #* Find all nodes within a certain radius of q_new
-    def near(self, q_new):
+    def near(self, q_new, q_goal):
         radius = self.search_radius
         nodes_in_radius = []
+        distance_to_goal = np.linalg.norm(np.array(q_new) - np.array(q_goal))
         for i in range(len(self.nodes)):
-            if np.linalg.norm(np.array(self.nodes[i]) - np.array(q_new)) < radius:
+            if np.linalg.norm(np.array(self.nodes[i]) - np.array(q_new)) < radius and distance_to_goal > 0.001:
                 nodes_in_radius.append(i)
         return nodes_in_radius
     
@@ -205,7 +217,9 @@ class Planner:
     
     #* Generate a random configuration
     def random_configuration(self):
-        return np.random.rand(2) * (self.dominion[1] - self.dominion[0]) + self.dominion[0]
+        #!return np.random.rand(2) * (self.dominion[1] - self.dominion[0]) + [self.dominion[0]/2, -self.dominion[1]]
+       return [np.random.uniform(self.dominion[0], self.dominion[1]),np.random.uniform(self.dominion[2], self.dominion[3]) ]
+
 
     #* Find the nearest node in the tree to q_rand
     def nearest(self, q_rand):
@@ -252,12 +266,9 @@ def compute_path(start_p, goal_p, state_validity_checker, bounds, max_time=1.0):
     rrt = Planner(state_validity_checker, dominion=bounds)
     path, parents, nodes = rrt.compute_path(start_p, goal_p)
     # TODO: if solved, return a list with the [x, y] points in the solution path.
-    # example: [[x1, y1], [x2, y2], ...]
     if path is not None:
         return path, parents, nodes
     
-    #!: Ensure that the path brings the robot to the goal (with a small tolerance)!
-
 # Controller: Given the current position and the goal position, this function computes the desired 
 # lineal velocity and angular velocity to be applied in order to reah the goal.
 def move_to_point(current, goal, Kv=0.5, Kw=0.5):
