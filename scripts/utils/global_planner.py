@@ -217,7 +217,6 @@ class Planner:
     
     #* Generate a random configuration
     def random_configuration(self):
-        #!return np.random.rand(2) * (self.dominion[1] - self.dominion[0]) + [self.dominion[0]/2, -self.dominion[1]]
        return [np.random.uniform(self.dominion[0], self.dominion[1]),np.random.uniform(self.dominion[2], self.dominion[3]) ]
 
 
