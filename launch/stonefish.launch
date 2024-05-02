@@ -1,6 +1,6 @@
 <launch>
     <param name="~frame_id" type="string" value="world_ned" />
-    <include file="$(find turtlebot_simulation)/launch/kobuki_motion_planning.launch" />
+    <include file="$(find turtlebot_simulation)/launch/turtlebot_integration.launch" />
 
     <!-- Octmap server -->
     <!-- <param name="~frame_id" type="string" value="odom" /> -->

@@ -63,6 +63,7 @@ class OnlinePlanner:
 
         #Frontier publisher
         self.frontier_pub = rospy.Publisher('~frontiers', MarkerArray, queue_size=1)
+        self.waypoints_pub = rospy.Publisher('/waypoints',PoseStamped,queue_size=10)
         # SUBSCRIBERS
         #?subscriber to gridmap_topic from Octomap Server  
         self.gridmap_sub = rospy.Subscriber(gridmap_topic, OccupancyGrid, self.get_gridmap)
@@ -73,7 +74,7 @@ class OnlinePlanner:
         
         # TIMERS
         # Timer for velocity controller
-        rospy.Timer(rospy.Duration(0.1), self.controller)
+        rospy.Timer(rospy.Duration(0.1), self.dwa_controller)
 
     # Odometry callback: Gets current robot pose and stores it into self.current_pose
     def get_odom(self, odom):
@@ -109,7 +110,7 @@ class OnlinePlanner:
         if (gridmap.header.stamp - self.last_map_time).to_sec() > 1:            
             self.last_map_time = gridmap.header.stamp
 
-
+            self.current_gridmap = gridmap
             # Update State Validity Checker
             env = np.array(gridmap.data).reshape(gridmap.info.height, gridmap.info.width).T
             origin = [gridmap.info.origin.position.x, gridmap.info.origin.position.y]
@@ -170,7 +171,7 @@ class OnlinePlanner:
         # Publish plan marker to visualize in rviz
         self.publish_path()
         # remove initial waypoint in the path (current pose is already reached)
-        # del self.path[0]                 
+        del self.path[0]                 
         
 
     # This method is called every 0.1s. It computes the velocity comands in order to reach the 
@@ -196,6 +197,29 @@ class OnlinePlanner:
                 v, w = move_to_point(self.current_pose, self.path[0], self.Kv, self.Kw)                
         # Publish velocity commands
         self.__send_commnd__(v, w)
+
+    def dwa_controller(self, event):
+        v = 0
+        w = 0
+        if len(self.path) > 0:
+            # TODO: If current waypoint is reached with some tolerance move to the next waypoint.
+            if np.linalg.norm(self.current_pose[0:2] - self.path[0]) < 0.16:
+                # remove reached waypoint
+                print("Waypoint deleted!", self.path[0])
+                del self.path[0]
+
+                # If it was the last waypoint in the path show a message indicating it
+                if len(self.path) == 0:
+                    print("Goal reached!") 
+
+            else:
+                # move to the next waypoint in the path
+                print("velocity command to: ", self.path[0])
+                wp = PoseStamped()
+                wp.pose.position.x = self.path[0][0]
+                wp.pose.position.y = self.path[0][1]
+                self.waypoints_pub.publish(wp)      
+        
     
 
     # PUBLISHER HELPERS
@@ -222,7 +246,7 @@ class OnlinePlanner:
         if len(self.copy_path) > 1:
             print("Publish path!")
             m = Marker()
-            m.header.frame_id = 'world_ned'
+            m.header.frame_id = self.current_gridmap.header.frame_id
             m.header.stamp = rospy.Time.now()
             m.id = 0
             m.type = Marker.LINE_STRIP
@@ -298,7 +322,7 @@ class OnlinePlanner:
         marker_array = MarkerArray()
 
         marker = Marker()
-        marker.header.frame_id = "odom"
+        marker.header.frame_id = self.current_gridmap.header.frame_id
         marker.type = marker.POINTS
         marker.action = marker.ADD
         marker.id = 0
@@ -328,7 +352,7 @@ class OnlinePlanner:
     def publish_centroids(self):
 
         marker = Marker()
-        marker.header.frame_id = "odom"  # Marker's reference frame
+        marker.header.frame_id = self.current_gridmap.header.frame_id # Marker's reference frame
         marker.header.stamp = rospy.Time.now()
         marker.ns = "centroids"  
         marker.id = 0  # Marker ID
@@ -362,7 +386,7 @@ class OnlinePlanner:
     def publish_nodes(self):
 
         marker = Marker()
-        marker.header.frame_id = "world_ned"  # Marker's reference frame
+        marker.header.frame_id = self.current_gridmap.header.frame_id # Marker's reference frame
         marker.header.stamp = rospy.Time.now()
         marker.ns = "nodes"  
         marker.id = 0  # Marker ID
@@ -393,7 +417,7 @@ class OnlinePlanner:
 
     def publish_edges(self):
         marker = Marker()
-        marker.header.frame_id = "world_ned"
+        marker.header.frame_id = self.current_gridmap.header.frame_id
         marker.type = marker.LINE_LIST
         marker.action = marker.ADD
         marker.scale.x = 0.02
