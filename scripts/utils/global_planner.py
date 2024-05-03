@@ -79,7 +79,7 @@ class StateValidityChecker:
         # TODO: Discretize the positions between 2 waypoints with an step_size = 2*self.distance
         # TODO: for each point check if `is_valid``. If only one element is not valid return False, otherwise True. 
 
-        step_size = self.distance/2
+        step_size = self.distance*2
         for i in range(len(path) - 1):
             start = path[i]
             end = path[i + 1]
@@ -118,7 +118,7 @@ class StateValidityChecker:
     
 # Class to implement the RRT* algorithm
 class Planner:
-    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 5):
+    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.5, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 5):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
         self.max_iterations = max_iterations
@@ -253,7 +253,7 @@ class Planner:
             path.append(self.nodes[idx])
             idx = self.parent[idx]
 
-        path.append(self.nodes[0])
+        # path.append(self.nodes[0])
         return path[::-1]
     
 # Planner: This function has to plan a path from start_p to goal_p. To check if a position is valid the 

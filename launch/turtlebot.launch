@@ -1,0 +1,20 @@
+<launch>
+    <param name="~frame_id" type="string" value="world_ned" />
+    
+    <!-- Octmap server -->
+    <!-- <param name="~frame_id" type="string" value="odom" /> -->
+    <node pkg="ho_planning" type="laser_scan_to_point_cloud_node.py" name="laserscan_to_pointcloud"/>
+    
+
+    <node pkg="ho_localization" type="localization_node.py" name="localization_node"/>
+    <node pkg="octomap_server" type="octomap_server_node" name="octomap" output="screen">
+        <remap to="/laserscan_to_pointcloud/converted_pc" from="/cloud_in"/>
+    </node>
+
+    <!-- Twist velocity -->
+    <node pkg="ho_planning" type="vel_adapter_node.py" name="cmd_vel_adapter"/>
+
+    <!-- global path planner -->
+    <node pkg="ho_planning" type="global_path_planner_node.py" name="global_planner_node" output="screen"/>
+
+</launch>
