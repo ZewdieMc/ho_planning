@@ -64,6 +64,7 @@ class OnlinePlanner:
         #Frontier publisher
         self.frontier_pub = rospy.Publisher('~frontiers', MarkerArray, queue_size=1)
         self.waypoints_pub = rospy.Publisher('/waypoints',PoseStamped,queue_size=10)
+
         # SUBSCRIBERS
         #?subscriber to gridmap_topic from Octomap Server  
         self.gridmap_sub = rospy.Subscriber(gridmap_topic, OccupancyGrid, self.get_gridmap)
@@ -74,7 +75,7 @@ class OnlinePlanner:
         
         # TIMERS
         # Timer for velocity controller
-        rospy.Timer(rospy.Duration(0.1), self.dwa_controller)
+        rospy.Timer(rospy.Duration(0.1), self.controller)
 
     # Odometry callback: Gets current robot pose and stores it into self.current_pose
     def get_odom(self, odom):
@@ -138,10 +139,12 @@ class OnlinePlanner:
                 total_path = [self.current_pose[0:2]] + self.path
                 # TODO: check total_path validity. If total_path is not valid replan
                 if not self.svc.check_path(total_path):
-                    rospy.logerr("Path not valid anymore, replanning")
-                    self.path = [] 
-                    self.plan()
+                    # rospy.logerr("Path not valid anymore, replanning")
+                    # self.path = [] 
+                    # self.plan()
+                    ...
                 else:
+                    ...
                     rospy.logwarn("Path still valid following it")
 
     # Solve plan from current position to self.goal. 
@@ -156,14 +159,18 @@ class OnlinePlanner:
         # Check if robot is collided with an obstacle
         if self.robot_collided():
             rospy.logerr("Robot is collided with an obstacle")
-            #!self.back_off()
+            self.back_off()
 
         rospy.loginfo("Computing new path")
         # TODO: plan a path from self.current_pose to self.goal
         self.path, parents, nodes = compute_path(self.current_pose[0:2], self.goal, self.svc, self.bounds, 1.0)
         self.copy_path = self.path.copy()
-        self.nodes = nodes
-        self.parent = parents
+        if len(self.path) > 0:
+            self.nodes = nodes
+            self.parent = parents
+        else:
+            rospy.logerr("No path found")
+            # self.plan()
         self.publish_nodes()
         self.publish_edges()        
         rospy.loginfo("Path found")
@@ -171,7 +178,7 @@ class OnlinePlanner:
         # Publish plan marker to visualize in rviz
         self.publish_path()
         # remove initial waypoint in the path (current pose is already reached)
-        del self.path[0]                 
+        # del self.path[0] #! what is this for? comment or uncomment it based on its necessity                 
         
 
     # This method is called every 0.1s. It computes the velocity comands in order to reach the 
@@ -193,7 +200,6 @@ class OnlinePlanner:
 
             else:
                 # move to the next waypoint in the path
-                print("velocity command to: ", self.path[0])
                 v, w = move_to_point(self.current_pose, self.path[0], self.Kv, self.Kw)                
         # Publish velocity commands
         self.__send_commnd__(v, w)

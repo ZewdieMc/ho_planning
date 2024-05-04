@@ -118,7 +118,7 @@ class StateValidityChecker:
     
 # Class to implement the RRT* algorithm
 class Planner:
-    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 5):
+    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.2, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 10):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
         self.max_iterations = max_iterations
@@ -133,7 +133,6 @@ class Planner:
         self.parent = []
         self.cost = []
 
-
         # iterations
         self.iterations = 0
 
@@ -144,15 +143,26 @@ class Planner:
     def compute_path(self, q_start, q_goal):
         time_start = time.time()
         # Implement RRT* algorithm.
+        goal_found_counter = 0
+        node_found_counter = 0
+        duplicate_counter = 0
+
         self.nodes = [q_start]
+        self.nodes_dict = {tuple(q_start): 0}
         self.parent = [0]
         self.cost = [0]
 
         for _ in range(self.max_iterations):
             self.iterations += 1
             q_rand = q_goal if np.random.rand() < self.p_goal else self.random_configuration()
+            print("node count: ", len(self.nodes))
+
             q_near, near_idx = self.nearest(q_rand)
+            print("ietration#: ", self.iterations)
+            print("q_rand: ", q_rand)
+            print("nearest: ", q_near)
             q_new = self.steer(q_near, q_rand)
+            print("new: ", q_new)
 
             if self.state_validity_checker.is_valid(q_new) and self.state_validity_checker.check_path([q_near, q_new]):
                 neighbors = self.near(q_new, q_goal)
@@ -165,11 +175,26 @@ class Planner:
                     if self.state_validity_checker.check_path([self.nodes[i], q_new]) and new_cost < min_cost:
                         min_cost = new_cost 
                         min_idx = i
-                print(self.iterations)
-                print("nodes count: ", len(self.nodes))    
-                self.nodes.append(q_new)
-                self.parent.append(min_idx)
-                self.cost.append(min_cost)
+                # Check if the goal is reached
+                # if not self.path_to_goal_found:
+                index = self.find_goal_index(q_new)
+                
+                # Goal already exists in the tree, check if new cost is less than the existing cost
+                if index is not None:# and np.allclose(q_new, q_goal, atol=0.001):
+                    node_found_counter += 1
+                    if min_cost < self.cost[index]:
+                        self.parent[index] = min_idx
+                        self.cost[index] = min_cost
+                        print("cost updated")
+                    if np.allclose(q_new, q_goal, atol=0.001):
+                        goal_found_counter += 1
+                        print("goal found")
+                    
+                else:         
+                    self.nodes.append(q_new)
+                    self.parent.append(min_idx)
+                    self.cost.append(min_cost)
+                    self.nodes_dict[tuple(q_new)] = min_cost
 
                 # Rewire the tree
                 for i in neighbors:
@@ -178,14 +203,37 @@ class Planner:
                         self.cost[i] = self.cost[-1] + np.linalg.norm(self.nodes[i] - q_new)
                         
             if time.time() - time_start > self.time_limit:
+                print("============================================")
+                print("duplicate nodes: ", self.count_duplicates())
+                print("time span: ", time.time() - time_start)
+                print("goal found counter: ", goal_found_counter)
+                print("node found counter: ", node_found_counter)
+                print("other nodes: ", (node_found_counter - goal_found_counter))
+                print("============================================")
                 raw_path = self.build_path(q_goal)
                 smoothed_path = self.smooth_path(raw_path)
-                if len(smoothed_path) > 0:
-                    return smoothed_path, self.parent, self.nodes
-                else:
-                    self.time_limit += 1
+                # if self.path_to_goal_found and len(smoothed_path) > 0:
+                return smoothed_path, self.parent, self.nodes
+                # else:
+                    # self.time_limit += 5
         return [], [], []
 
+    def find_goal_index(self, q_goal):
+        for i, node in enumerate(self.nodes):
+            if np.allclose(node, q_goal, atol=0.001):
+                self.path_to_goal_found = True
+                return i
+        return None
+
+
+    def count_duplicates(self):
+        duplicates = 0
+        for i in range(len(self.nodes)):
+            for j in range(i + 1, len(self.nodes)):
+                if np.allclose(self.nodes[i], self.nodes[j], atol=0.001):
+                    duplicates += 1
+        return duplicates
+    
     #* Find all nodes within a certain radius of q_new
     def near(self, q_new, q_goal):
         radius = self.search_radius
@@ -253,7 +301,7 @@ class Planner:
             path.append(self.nodes[idx])
             idx = self.parent[idx]
 
-        path.append(self.nodes[0])
+        path.append(self.nodes[idx])
         return path[::-1]
     
 # Planner: This function has to plan a path from start_p to goal_p. To check if a position is valid the 
@@ -265,9 +313,15 @@ def compute_path(start_p, goal_p, state_validity_checker, bounds, max_time=1.0):
     rrt = Planner(state_validity_checker, dominion=bounds)
     path, parents, nodes = rrt.compute_path(start_p, goal_p)
     # TODO: if solved, return a list with the [x, y] points in the solution path.
-    if path is not None:
+    if path is not None and len(path) > 0:
         return path, parents, nodes
     
+    return [], [], []
+    
+    # while path is None or len(path) == 0:
+    #     path, parents, nodes = rrt.compute_path(start_p, goal_p)
+        
+    # return path, parents, nodes
 # Controller: Given the current position and the goal position, this function computes the desired 
 # lineal velocity and angular velocity to be applied in order to reah the goal.
 def move_to_point(current, goal, Kv=0.5, Kw=0.5):
