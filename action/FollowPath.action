@@ -1,0 +1,8 @@
+# Define the goal
+nav_msgs/Path path
+---
+# Define the result
+bool success
+---
+# Define a feedback message
+float64[] current_path

@@ -11,47 +11,57 @@ import math
 from numpy import cos, sin
 from utils.state_validity_checker import StateValidityChecker
 import tf
-from exploration import find_frontiers_conv, cluster_frontiers
+import actionlib
+from ho_planning.msg import FollowPathAction, FollowPathFeedback, FollowPathResult
 
 class DWANode:
     def __init__(self, gridmap_topic, odom_topic):
         # Tuning Parameters 
-        self.dt = 0.5
-        self.v_max = 0.2 # max linear vel
+        self.dt = 2.5
+        self.v_max = 0.15 # max linear vel
         self.v_min = 0.05 # min linear vel
         self.acc = 2.0 # linear acceleration
 
-        self.w_max = 1.0 # max angular vel
+        self.w_max = 1.5 # max angular vel
         self.w_min = 0.1 # min angular vel
         self.acc_ang = 0.4 # angular acceleration
         # resolutions
         self.v_res = 0.05
         self.w_res = 0.05
 
-        self.goal_heading_bias = 1.5
+        self.goal_heading_bias = 5.0
         self.clearance_bias = 1
-        self.velocity_bias = 0.5
+        self.velocity_bias = 0.6
 
+        self.window_size = 0.5 # m
         self.map_update_interval = 0.5
         self.enable_visualization = True
+        self.ned = True
         # Class Module
         self.svc = StateValidityChecker(distance=0.15)
 
         # Class Parameters
         self.goal = None
+        self.path = None
         self.current_pose = [0,0,0]
         self.current_vel  = [0,0]
         self.last_map_time = rospy.Time.now()
+        self.active = False
+        self.action_rate = rospy.Rate(5)
 
+        # ACTION SERVER
+        self.server = actionlib.SimpleActionServer('follow_path', FollowPathAction, self.handle_follow_path, False)
+        self.server.start()
         # PUBLISHER
         self.vel_pub = rospy.Publisher('/cmd_vel',Twist,queue_size=1)
         self.states_pub = rospy.Publisher('~states',Marker,queue_size=1)
-        self.path_pub = rospy.Publisher('~local_path',Path,queue_size=1)
+        self.trajectory_pub = rospy.Publisher('~local_path',Marker,queue_size=1)
 
         # SUBSCRIBERS
         self.odom_sub = rospy.Subscriber(odom_topic,Odometry, self.odom_cb) 
         self.gridmap_sub = rospy.Subscriber(gridmap_topic,OccupancyGrid, self.gridmap_cb) 
-        self.move_goal_sub = rospy.Subscriber('/waypoints', PoseStamped, self.get_goal)  # Only for testing purposes
+        # self.path_sub = rospy.Subscriber('/global_path',Path,self.path_cb)
+        # self.move_goal_sub = rospy.Subscriber('/waypoints', PoseStamped, self.get_goal)  # Only for testing purposes
 
 
         rospy.Timer(rospy.Duration(0.1), self.control_loop)
@@ -95,20 +105,83 @@ class DWANode:
         rospy.loginfo("goal: %s", goal)
         self.goal = [goal.pose.position.x, goal.pose.position.y]
             
+    def path_cb(self, msg):
+        path = []
+        for p in msg.poses:
+            path.append([p.pose.position.x, p.pose.position.y])
+        self.path = path
 
-    
+    def handle_follow_path(self, goal):
+        self.reset_robot()
+        success = True
+        # Deal with goal
+        self.path = []
+        for p in goal.path.poses:
+            self.path.append([p.pose.position.x, p.pose.position.y])
+        
+        self.active = True
+        while not self.near_goal() and not rospy.is_shutdown():
+            # if self.robot_is_stuck():
+            #     rospy.logerr('Robot Stuck!!')
+            #     self.reset_robot()
+            #     self.server.set_preempted()
+            #     success = False
+            #     break
+            
+            if self.server.is_preempt_requested():
+                rospy.logerr('Preemptted!!')
+                self.reset_robot()
+                self.server.set_preempted()
+                success = False
+                break
+            
+            # fb = FollowPathFeedback()
+            # fb.current_path = P
+            # self.server.publish_feedback()
+            
+            self.action_rate.sleep()
+            
+            
+        
+        self.reset_robot()
+        if success:
+            rospy.loginfo('Succeeded')
+            result = FollowPathResult()
+            result.success = True
+            self.server.set_succeeded(result)
+
+                
+
+
+
+
+    def reset_robot(self):
+        self.path = None
+        self.goal = None
+        self.active = False
+        self.vel_pub.publish(Twist(Vector3(0,0,0), Vector3(0,0,0)))
+
 
 
     ##################################################################
     #### Alogorithm Functions
     ##################################################################
     def control_loop(self, _):
-        if self.goal and self.svc.there_is_map:
-            self.v_array,self.w_array = self.generate_velocity_array()
-            v,w = self.compute_velocity(self.v_array,self.w_array)
-
-            self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
-            self.visualize()
+        if self.active:
+            try:    
+                self.update_goal_from_path()
+                if self.goal and self.svc.there_is_map:
+                    
+                    self.v_array,self.w_array = self.generate_velocity_array()
+                    v,w = self.compute_velocity(self.v_array,self.w_array)
+                    if self.ned:
+                        self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
+                        self.visualize()
+                    else:
+                        self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
+                        self.visualize()
+            except Exception as e:
+                rospy.logerr(e)
 
     def generate_velocity_array(self ):
         current_vel = self.current_vel
@@ -154,8 +227,12 @@ class DWANode:
                 score = self.goal_heading_bias * self.heading_score(state) + \
                         self.clearance_bias * self.clearance_score(state) +\
                         self.velocity_bias * self.velocity_score(state,current_max_v,current_min_v)
+                # prevent selecting 0
+                if v == 0.0:
+                    score = 0
                 
-                if score > 0 or v == 0:
+
+                if score >= 0 or v == 0:
                     scores[i,j] = score
                 else:
                     penalty_list.append(i)
@@ -166,10 +243,10 @@ class DWANode:
                     
         self.states = states
         self.scores = scores
+        # print(scores)
 
         max_idx = np.argmax(self.scores)
         i, j = np.unravel_index(max_idx, scores.shape)
-        print(i,j)
         if not( i == 0 and j == 0):
             self.selected_states = self.states[i, j] 
         else:
@@ -211,7 +288,20 @@ class DWANode:
     def velocity_score(self,point, max_linear_velocity, min_linear_velocity):
         #worst is 0, best is 1
         velocity_score = (abs(point[3]) - min_linear_velocity) / (max_linear_velocity - min_linear_velocity)
-        return velocity_score + 0.1
+        return velocity_score 
+    
+    def update_goal_from_path(self):
+        if self.path:
+            idx = 0
+            for i, p in enumerate(self.path):
+                dis = self.distance_to_robot(p)
+                self.goal = p
+                idx = i
+                if dis > self.window_size:    
+                    break
+            # Update path
+            self.path = self.path[idx:]
+        
     ##################################################################
     #### Visualize functions
     ##################################################################
@@ -263,20 +353,28 @@ class DWANode:
         self.states_pub.publish(marker)
 
     def visualize_trajectories(self):
-        path_msg = Path()
-        path_msg.header.stamp = rospy.Time.now()
-        path_msg.header.frame_id = self.current_gridmap.header.frame_id  # Specify the frame ID
+        marker_msg = Marker()
+        marker_msg.header.stamp = rospy.Time.now()
+        marker_msg.header.frame_id = self.current_gridmap.header.frame_id  # Specify the frame ID
+        marker_msg.type = Marker.LINE_STRIP
+        marker_msg.action = Marker.ADD
+        marker_msg.pose.orientation.w = 1.0  # Default orientation
+
+        marker_msg.scale.x = 0.03  # Line width
+
+        marker_msg.color.g = 1.0  # Red color
+        marker_msg.color.a = 1.0  # Full opacity
 
         path = self.find_path(self.selected_states)
         for p in path:
-            pose = PoseStamped()
-            pose.header.stamp = rospy.Time.now()
-            pose.header.frame_id = self.current_gridmap.header.frame_id  # Specify the frame ID
-            pose.pose.position = Point(x=p[0], y=p[1], z=0.0)  # Example position
-            path_msg.poses.append(pose)
+            point = Point()
+            point.x = p[0]
+            point.y = p[1]
+            point.z = 0.0  # Assuming 2D trajectory, adjust for 3D if needed
+            marker_msg.points.append(point)
 
-        # Publish the Path message
-        self.path_pub.publish(path_msg)
+        # Publish the Marker message
+        self.trajectory_pub.publish(marker_msg)
 
     def find_path(self,state):
         path = []
@@ -290,6 +388,13 @@ class DWANode:
     ##################################################################
     #### Utility functions
     ##################################################################
+    def distance_to_robot(self,p):
+        return np.linalg.norm(np.array(self.current_pose[:2] -p) )
+    
+    def near_goal(self):
+        return np.linalg.norm(np.array(self.current_pose[:2] -self.path[-1]) ) < 0.15
+
+
 def wrap_angle(angle):
     return (angle + ( 2.0 * np.pi * np.floor( ( np.pi - angle ) / ( 2.0 * np.pi ) ) ) )
 

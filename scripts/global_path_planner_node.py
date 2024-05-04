@@ -9,10 +9,11 @@ from nav_msgs.msg import Odometry
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, Pose
 from std_msgs.msg import ColorRGBA 
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import PoseStamped
 from utils.global_planner import StateValidityChecker, move_to_point, compute_path
-
+import actionlib
+from ho_planning.msg import FollowPathAction, FollowPathGoal, FollowPathResult
 class OnlinePlanner:
 
     # OnlinePlanner Constructor
@@ -46,19 +47,26 @@ class OnlinePlanner:
         #Frontiers
         self.frontiers = []    
         self.centroids = []
-
+        self.current_gridmap = None
         # tree nodes and edges
         self.nodes = []
         self.parent = []
+        # ACTION CLIENT
+        self.client = actionlib.SimpleActionClient('follow_path', FollowPathAction)
+        self.client.wait_for_server()
+
         # PUBLISHERS
         #? Publisher for sending velocity commands to the robot
         self.cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1)
+        self.path_pub = rospy.Publisher("/global_path",Path, queue_size=10)
         #? Publisher for visualizing the path to with rviz
         self.marker_pub = rospy.Publisher('~path_marker', Marker, queue_size=1)
         self.centroid_pub = rospy.Publisher('~centroids',Marker,queue_size=1)
 
         self.node_pub = rospy.Publisher('rrt_nodes', Marker, queue_size=1)
         self.edge_pub = rospy.Publisher('rrt_edges', Marker, queue_size=1)
+        self.bounds_pub = rospy.Publisher('rrt_bounds', Marker, queue_size=1)
+
 
 
         #Frontier publisher
@@ -75,7 +83,8 @@ class OnlinePlanner:
         
         # TIMERS
         # Timer for velocity controller
-        rospy.Timer(rospy.Duration(0.1), self.controller)
+        rospy.Timer(rospy.Duration(0.1), self.dwa_controller)
+        rospy.Timer(rospy.Duration(1), self.visualize)
 
     # Odometry callback: Gets current robot pose and stores it into self.current_pose
     def get_odom(self, odom):
@@ -100,6 +109,7 @@ class OnlinePlanner:
                 #* Plan a new path to self.goal
                 self.path = []
                 self.plan()
+                self.send_action()
             else:
                 print("Goal is not valid, unable to plan a path")
         
@@ -120,7 +130,7 @@ class OnlinePlanner:
             map_height = self.svc.map.shape[0] * self.svc.resolution
             map_width = self.svc.map.shape[1] * self.svc.resolution
 
-            self.bounds = np.array([origin[0] - 0.5 , origin[0] + map_height + 0.5  , origin[1] - 0.5 , origin[1] + map_width + 0.5 ])
+            self.bounds = [origin[0] - 0.5 , origin[0] + map_height + 0.5  , origin[1] - 0.5 , origin[1] + map_width + 0.5 ]
             #! centroids
             #! self.centroids, self.frontiers = exploration.cluster_frontiers(self.frontiers)
             # rospy.loginfo("Centroid Index: %d", len(self.frontiers))
@@ -139,13 +149,23 @@ class OnlinePlanner:
                 total_path = [self.current_pose[0:2]] + self.path
                 # TODO: check total_path validity. If total_path is not valid replan
                 if not self.svc.check_path(total_path):
-                    # rospy.logerr("Path not valid anymore, replanning")
-                    # self.path = [] 
-                    # self.plan()
-                    ...
+                    rospy.logerr("Path not valid anymore, replanning")
+                    self.client.cancel_goal()
+                    self.path = [] 
+                    self.plan()
+                    if self.path:
+                        self.send_action()
                 else:
                     ...
                     rospy.logwarn("Path still valid following it")
+
+    def send_action(self):
+        goal = FollowPathGoal()
+        path_msg = self.discretize_path([self.current_pose[0:2]] + self.path)
+        goal.path = path_msg
+        self.path_pub.publish(path_msg)
+        self.client.send_goal(goal)
+
 
     # Solve plan from current position to self.goal. 
     def plan(self):
@@ -176,9 +196,13 @@ class OnlinePlanner:
         rospy.loginfo("Path found")
         print("Path: ", self.path)
         # Publish plan marker to visualize in rviz
-        self.publish_path()
+        # self.publish_path()
+        # del self.path[0]                 
+        
+        # path_msg = self.discretize_segment(self.current_pose, self.path[0])
+        # self.path_pub.publish(path_msg)
         # remove initial waypoint in the path (current pose is already reached)
-        # del self.path[0] #! what is this for? comment or uncomment it based on its necessity                 
+        # del self.path[0]                 
         
 
     # This method is called every 0.1s. It computes the velocity comands in order to reach the 
@@ -213,19 +237,29 @@ class OnlinePlanner:
                 # remove reached waypoint
                 print("Waypoint deleted!", self.path[0])
                 del self.path[0]
+                
 
                 # If it was the last waypoint in the path show a message indicating it
                 if len(self.path) == 0:
                     print("Goal reached!") 
+                else:
+                    ...
+                    # path_msg = self.discretize_segment(self.current_pose, self.path[0])
+                    # self.path_pub.publish(path_msg)
 
             else:
                 # move to the next waypoint in the path
                 print("velocity command to: ", self.path[0])
-                wp = PoseStamped()
-                wp.pose.position.x = self.path[0][0]
-                wp.pose.position.y = self.path[0][1]
-                self.waypoints_pub.publish(wp)      
-        
+                # wp = PoseStamped()
+                # wp.header.frame_id = self.current_gridmap.header.frame_id
+                # wp.pose.position.x = self.path[0][0]
+                # wp.pose.position.y = self.path[0][1]
+                # self.waypoints_pub.publish(wp)    
+                # path_msg = self.discretize_segment(self.current_pose, self.path[0])
+                # self.path_pub.publish(path_msg)
+        else:
+            ...
+            # rospy.loginfo("No path -- controller doing nothing")
     
 
     # PUBLISHER HELPERS
@@ -442,16 +476,128 @@ class OnlinePlanner:
             marker.points.append(p2)
         self.edge_pub.publish(marker)
 
+    def publish_bound(self):
+        if self.bounds and self.current_gridmap:
+            marker = Marker()
+            marker.header.frame_id = self.current_gridmap.header.frame_id
+            marker.type = marker.LINE_LIST
+            marker.action = marker.ADD
+            marker.scale.x = 0.02
+            marker.color.a = 1.0
+            marker.color.r = 1.0
+            marker.color.g = 1.0
+            marker.color.b = 1.0
+            
+            p1 = Point()
+            p1.x = self.bounds[0]
+            p1.y = self.bounds[2]
+            
+
+            p2 = Point()
+            p2.x = self.bounds[0]
+            p2.y = self.bounds[3]
+            
+
+            p3 = Point()
+            p3.x = self.bounds[1]
+            p3.y = self.bounds[3]
+            
+            p4 = Point()
+            p4.x = self.bounds[1]
+            p4.y = self.bounds[2]
+
+            marker.points.append(p1)
+            marker.points.append(p2)
+            marker.points.append(p2)
+            marker.points.append(p3)
+            marker.points.append(p3)
+            marker.points.append(p4)
+            marker.points.append(p4)
+            marker.points.append(p1)
+
+            self.bounds_pub.publish(marker)
+
     def visualize(self,a):
+        print(555)
+
+        self.publish_bound()
         if self.nodes and self.parent:
             self.publish_edges()
             self.publish_nodes()
             self.publish_path()
+            
+
+    def discretize_segment(self,start, end):
+        result_path = Path()
+        result_path.header.frame_id = self.current_gridmap.header.frame_id
+        result_path.header.stamp = rospy.Time.now()
+
+        # Extract start and end coordinates
+        incremental_range = 0.05
+        x_start, y_start = start[0:2]
+        x_end, y_end = end[0:2]
+        total_distance = np.linalg.norm(np.array([x_start,y_start]) - np.array([x_end,y_end]))
+
+        # Calculate the number of waypoints
+        num_points = int(total_distance / incremental_range) + 1
+
+        # Calculate the increments for each axis
+        dx = (x_end - x_start) / (num_points - 1)
+        dy = (y_end - y_start) / (num_points - 1)
+
+        # Generate the waypoints
+        for i in range(num_points):
+            x = x_start + i * dx
+            y = y_start + i * dy
+            p = PoseStamped()
+            p.pose.position.x = x
+            p.pose.position.y = y
+            result_path.poses.append(p)
+
+        # print("start:{} end:{}".format(start[:2],end[:2]))
+        # print("dis_path:{}".format(result_path))
+
+        return result_path
+    
+    def discretize_path(self,path):
+        result_path = Path()
+        result_path.header.frame_id = self.current_gridmap.header.frame_id
+        result_path.header.stamp = rospy.Time.now()
+
+        # Extract start and end coordinates
+        incremental_range = 0.05
+        for i in range(len(path) -1):
+            x_start, y_start = path[i]
+            x_end, y_end = path[i + 1]
+            total_distance = np.linalg.norm(np.array([x_start,y_start]) - np.array([x_end,y_end]))
+
+            # Calculate the number of waypoints
+            num_points = int(total_distance / incremental_range) + 1
+
+            # Calculate the increments for each axis
+            dx = (x_end - x_start) / (num_points - 1)
+            dy = (y_end - y_start) / (num_points - 1)
+
+            # Generate the waypoints
+            for i in range(num_points):
+                x = x_start + i * dx
+                y = y_start + i * dy
+                p = PoseStamped()
+                p.pose.position.x = x
+                p.pose.position.y = y
+                result_path.poses.append(p)
+
+        # print("start:{} end:{}".format(start[:2],end[:2]))
+        # print("dis_path:{}".format(result_path))
+
+        return result_path
 
 # MAIN FUNCTION
 if __name__ == '__main__':
     rospy.init_node('turtlebot_online_path_planning_node')   
-    node = OnlinePlanner('/projected_map', '/odom', '/cmd_vel', np.array([-10.0, 10.0, -10.0, 10.0]), 0.2)
+    node = OnlinePlanner('/projected_map', '/odom', '/cmd_vel', [-10.0, 10.0, -10.0, 10.0], 0.2)
     
     # Run forever
     rospy.spin()
+
+

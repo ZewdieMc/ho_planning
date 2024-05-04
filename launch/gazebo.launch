@@ -5,5 +5,5 @@
     <node pkg="octomap_server" type="octomap_server_node" name="octomap" output="screen"/>
     <!-- <node pkg="turtlebot_online_path_planning" type="turtlebot_online_path_planning_node.py" name="turtlebot_online_path_planning" output="screen"/> -->
     <!-- <node pkg="octomap_server" type="octomap_server_node" args="$(find turtlebot_online_path_planning)/stage4.bt" name="octomap" output="screen"> -->
-     <node pkg="ho_planning" type="global_path_planner_node.py" name="global_planner_node" output="screen"/>
+     <!-- <node pkg="ho_planning" type="global_path_planner_node.py" name="global_planner_node" output="screen"/> -->
 </launch>
