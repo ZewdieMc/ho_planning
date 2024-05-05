@@ -118,7 +118,7 @@ class StateValidityChecker:
     
 # Class to implement the RRT* algorithm
 class Planner:
-    def __init__(self, state_validity_checker, max_iterations=10000, delta_q=0.8, p_goal=0.5, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 5):
+    def __init__(self, state_validity_checker, max_iterations=3000, delta_q=0.8, p_goal=0.5, dominion=[-10, 10, -10, 10], search_radius=2, time_limit= 7):
         # Define constructor ...
         self.state_validity_checker = state_validity_checker
         self.max_iterations = max_iterations
@@ -145,7 +145,6 @@ class Planner:
         # Implement RRT* algorithm.
         goal_found_counter = 0
         node_found_counter = 0
-        duplicate_counter = 0
 
         self.nodes = [q_start]
         self.nodes_dict = {tuple(q_start): 0}
@@ -159,10 +158,10 @@ class Planner:
 
             q_near, near_idx = self.nearest(q_rand)
             print("ietration#: ", self.iterations)
-            print("q_rand: ", q_rand)
-            print("nearest: ", q_near)
+            # print("q_rand: ", q_rand)
+            # print("nearest: ", q_near)
             q_new = self.steer(q_near, q_rand)
-            print("new: ", q_new)
+            # print("new: ", q_new)
 
             if self.state_validity_checker.is_valid(q_new) and self.state_validity_checker.check_path([q_near, q_new]):
                 neighbors = self.near(q_new, q_goal)

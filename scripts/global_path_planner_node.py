@@ -190,7 +190,7 @@ class OnlinePlanner:
             self.parent = parents
         else:
             rospy.logerr("No path found")
-            # self.plan()
+            self.plan()
         self.publish_nodes()
         self.publish_edges()        
         rospy.loginfo("Path found")
@@ -249,7 +249,7 @@ class OnlinePlanner:
 
             else:
                 # move to the next waypoint in the path
-                print("velocity command to: ", self.path[0])
+                # print("velocity command to: ", self.path[0])
                 # wp = PoseStamped()
                 # wp.header.frame_id = self.current_gridmap.header.frame_id
                 # wp.pose.position.x = self.path[0][0]
@@ -257,6 +257,7 @@ class OnlinePlanner:
                 # self.waypoints_pub.publish(wp)    
                 # path_msg = self.discretize_segment(self.current_pose, self.path[0])
                 # self.path_pub.publish(path_msg)
+                ...
         else:
             ...
             # rospy.loginfo("No path -- controller doing nothing")
@@ -594,7 +595,7 @@ class OnlinePlanner:
 
 # MAIN FUNCTION
 if __name__ == '__main__':
-    rospy.init_node('turtlebot_online_path_planning_node')   
+    rospy.init_node('global_planner_node')   
     node = OnlinePlanner('/projected_map', '/odom', '/cmd_vel', [-10.0, 10.0, -10.0, 10.0], 0.2)
     
     # Run forever
