@@ -177,9 +177,9 @@ class OnlinePlanner:
             return
 
         # Check if robot is collided with an obstacle
-        if self.robot_collided():
-            rospy.logerr("Robot is collided with an obstacle")
-            self.back_off()
+        # if self.robot_collided():
+        #     rospy.logerr("Robot is collided with an obstacle")
+        #     self.back_off()
 
         rospy.loginfo("Computing new path")
         # TODO: plan a path from self.current_pose to self.goal

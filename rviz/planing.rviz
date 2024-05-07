@@ -7,6 +7,7 @@ Panels:
         - /Global Options1
         - /Grid1
         - /TF1/Frames1
+        - /RPLidar1
         - /Marker1
         - /Marker2
         - /Marker3
@@ -16,6 +17,9 @@ Panels:
         - /Odometry2
         - /Odometry2/Shape1
         - /Marker6
+        - /Marker7
+        - /Marker8
+        - /Marker8/Status1
       Splitter Ratio: 0.5635837912559509
     Tree Height: 797
   - Class: rviz/Selection
@@ -393,7 +397,6 @@ Visualization Manager:
       Unreliable: false
       Value: false
       Visibility:
-        "": true
         Grid: true
         GridCells: true
         Map: true
@@ -416,7 +419,6 @@ Visualization Manager:
       Unreliable: false
       Value: false
       Visibility:
-        "": true
         Grid: true
         GridCells: true
         Map: true
@@ -449,7 +451,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.009999999776482582
+      Size (m): 0.05000000074505806
       Style: Flat Squares
       Topic: /turtlebot/kobuki/sensors/rplidar
       Unreliable: false
@@ -518,13 +520,13 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/Marker
-      Enabled: true
+      Enabled: false
       Marker Topic: /global_planner_node/path_marker
       Name: Marker
       Namespaces:
-        path: true
+        {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Alpha: 1
       Class: rviz/GridCells
       Color: 25; 255; 0
@@ -539,7 +541,7 @@ Visualization Manager:
       Marker Topic: /frontier_planner/nbvp
       Name: Marker
       Namespaces:
-        nbvp: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
@@ -547,7 +549,7 @@ Visualization Manager:
       Marker Topic: /frontier_planner/viewpoints
       Name: Marker
       Namespaces:
-        viewpoint: true
+        {}
       Queue Size: 100
       Value: true
     - Angle Tolerance: 0.10000000149011612
@@ -590,7 +592,7 @@ Visualization Manager:
       Marker Topic: /dwa/states
       Name: Marker
       Namespaces:
-        viewpoint: true
+        {}
       Queue Size: 100
       Value: true
     - Class: rviz/Marker
@@ -598,7 +600,15 @@ Visualization Manager:
       Marker Topic: /dwa/local_path
       Name: Marker
       Namespaces:
-        "": true
+        {}
+      Queue Size: 100
+      Value: true
+    - Class: rviz/Marker
+      Enabled: true
+      Marker Topic: /dwa/closest_obs
+      Name: Marker
+      Namespaces:
+        {}
       Queue Size: 100
       Value: true
   Enabled: true
@@ -629,7 +639,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 5.08205509185791
+      Distance: 9.792351722717285
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -637,9 +647,9 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 2.894742012023926
-        Y: 1.8463646173477173
-        Z: 0.020558150485157967
+        X: 2.1253983974456787
+        Y: 1.0919139385223389
+        Z: -0.12994173169136047
       Focal Shape Fixed Size: true
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: true
@@ -647,7 +657,7 @@ Visualization Manager:
       Near Clip Distance: 0.009999999776482582
       Pitch: 1.5697963237762451
       Target Frame: <Fixed Frame>
-      Yaw: 6.258187770843506
+      Yaw: 6.278181076049805
     Saved: ~
 Window Geometry:
   Displays:

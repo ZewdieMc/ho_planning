@@ -11,15 +11,19 @@ import math
 from numpy import cos, sin
 from utils.state_validity_checker import StateValidityChecker
 import tf
+import tf2_ros
+import tf2_geometry_msgs
 import actionlib
 from ho_planning.msg import FollowPathAction, FollowPathFeedback, FollowPathResult
+from sensor_msgs.msg import PointCloud2, LaserScan
+from tf2_geometry_msgs import do_transform_point
 
 class DWANode:
     def __init__(self, gridmap_topic, odom_topic):
         # Tuning Parameters 
         self.dt = 2.0
         self.v_max = 0.2 # max linear vel
-        self.v_min = 0.09 # min linear vel
+        self.v_min = 0.04 # min linear vel
         self.acc = 2.0 # linear acceleration
 
         self.w_max = 1.5 # max angular vel
@@ -49,6 +53,9 @@ class DWANode:
         self.last_map_time = rospy.Time.now()
         self.active = False
         self.action_rate = rospy.Rate(5)
+        self.world_frame = "world_ned"
+        self.close_obs_list = []
+        self.current_gridmap = None
 
         # ACTION SERVER
         self.server = actionlib.SimpleActionServer('follow_path', FollowPathAction, self.handle_follow_path, False)
@@ -58,12 +65,16 @@ class DWANode:
         self.states_pub = rospy.Publisher('~states',Marker,queue_size=1)
         self.trajectory_pub = rospy.Publisher('~local_path',Marker,queue_size=1)
         self.closest_obs_pub = rospy.Publisher('~closest_obs',Marker,queue_size=1)
+        self.scan_pub = rospy.Publisher('/scan_filtered',LaserScan,queue_size=1)
 
         # SUBSCRIBERS
         self.odom_sub = rospy.Subscriber(odom_topic,Odometry, self.odom_cb) 
         self.gridmap_sub = rospy.Subscriber(gridmap_topic,OccupancyGrid, self.gridmap_cb) 
-        # self.path_sub = rospy.Subscriber('/global_path',Path,self.path_cb)
+        self.path_sub = rospy.Subscriber('/turtlebot/kobuki/sensors/rplidar',LaserScan,self.get_closest_obs)
         # self.move_goal_sub = rospy.Subscriber('/waypoints', PoseStamped, self.get_goal)  # Only for testing purposes
+
+        self.tfBuffer = tf2_ros.Buffer()
+        self.tfListener = tf2_ros.TransformListener(self.tfBuffer)
 
 
         rospy.Timer(rospy.Duration(0.1), self.control_loop)
@@ -123,13 +134,7 @@ class DWANode:
         
         self.active = True
         while not self.near_goal() and not rospy.is_shutdown():
-            # if self.robot_is_stuck():
-            #     rospy.logerr('Robot Stuck!!')
-            #     self.reset_robot()
-            #     self.server.set_preempted()
-            #     success = False
-            #     break
-            
+     
             if self.server.is_preempt_requested():
                 rospy.logerr('Preemptted!!')
                 self.reset_robot()
@@ -152,11 +157,6 @@ class DWANode:
             result.success = True
             self.server.set_succeeded(result)
 
-                
-
-
-
-
     def reset_robot(self):
         self.path = None
         self.goal = None
@@ -164,6 +164,60 @@ class DWANode:
         self.vel_pub.publish(Twist(Vector3(0,0,0), Vector3(0,0,0)))
 
 
+    def get_closest_obs(self, msg):   
+        #! publish the closest obstacle marker
+        lidar_msg = msg
+        filtered_ranges, minidx, maxidx = self.filter_lidar(msg)
+        data = np.array(msg.ranges)
+        # print(data)
+        data[:minidx] = 0
+        data[maxidx:] = 0
+        data[data > self.window_size + 0.2] = 0
+        lidar_msg.ranges = list(data)
+
+        transformStamped = self.tfBuffer.lookup_transform(self.world_frame, msg.header.frame_id, rospy.Time(0), rospy.Duration(1.0))
+        obs_list = []
+        for i,range in enumerate(lidar_msg.ranges):
+            if range != 0:
+                angle = msg.angle_min + i * msg.angle_increment
+                x = range * cos(angle)
+                y = range * sin(angle)
+                input_pose = PoseStamped()
+                input_pose.header = msg.header
+                input_pose.pose.position.x = x
+                input_pose.pose.position.y = y
+                input_pose.pose.position.z = 0
+                output_pose = tf2_geometry_msgs.do_transform_pose(input_pose, transformStamped)
+                obs_list.append([output_pose.pose.position.x, output_pose.pose.position.y])
+
+        self.scan_pub.publish(lidar_msg)
+        self.close_obs_list = obs_list
+        self.publish_closest_obs()
+
+    def filter_lidar(self,msg):
+        filtered_ranges = []
+
+        # Define angle range (in radians) for the front view
+        min_angle = -0.785*2  # -45 degrees in radians
+        max_angle = 0.785 *2  # 45 degrees in radians
+
+        # Get the scan angle increment
+        angle_increment = msg.angle_increment
+
+        # Calculate the corresponding indices for the angle range
+        min_index = int((min_angle - msg.angle_min) / angle_increment)
+        max_index = int((max_angle - msg.angle_min) / angle_increment)
+
+        # Ensure indices are within valid range
+        min_index = max(min_index, 0)
+        max_index = min(max_index, len(msg.ranges) - 1)
+
+        # Filter ranges within the specified angle range
+        filtered_ranges = msg.ranges[min_index : max_index + 1]
+
+        # Process the filtered LiDAR ranges (e.g., publish or further analysis)
+        return filtered_ranges, min_index, max_index
+        # 
 
     ##################################################################
     #### Alogorithm Functions
@@ -177,13 +231,14 @@ class DWANode:
                 self.v_array,self.w_array = self.generate_velocity_array()
                 v,w = self.compute_velocity(self.v_array,self.w_array)
                 if self.ned:
+                    # if w> 0:
+                    #     w = max(w, 1)
+                    # elif w< 0:
+                    #     w = min(w, -1)
                     self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
+                    
                     self.visualize()
-                else:
-                    self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
-                    self.visualize()
-            # except Exception as e:
-            #     rospy.logerr(e)
+               
 
     def generate_velocity_array(self ):
         current_vel = self.current_vel
@@ -225,12 +280,12 @@ class DWANode:
                 xi, yi, theta_i = self.compute_pose(v, w, x[0], x[1], x[2], self.dt)
                 state = [xi, yi, theta_i, v, w]
                 states[i,j] = state
+                # optimization function G(v, w) = alpha * heading_score + beta * clearance_score + gamma * velocity_score
+                score = 2.0 * (self.goal_heading_bias * self.heading_score(state) + \
+                        self.clearance_bias * self.dist_score(state) +\
+                        self.distance_bias * self.clearance_score(state) +\
+                        self.velocity_bias * self.velocity_score(state,current_max_v,current_min_v))# +\
 
-                score = self.goal_heading_bias * self.heading_score(state) + \
-                        self.clearance_bias * self.clearance_score(state) +\
-                        self.velocity_bias * self.velocity_score(state,current_max_v,current_min_v)# +\
-                        # self.distance_bias * self.dist(state)
-                # prevent selecting 0
                 if v == 0.0:
                     score = 0
                 
@@ -242,18 +297,20 @@ class DWANode:
 
         unique_penalty_list =  list(set(penalty_list))
         for i in unique_penalty_list:
-            scores[i,:] = -9999
+            scores[i,:] = -999
             
         self.states = states
         self.scores = scores
 
-        #! update self.scores to account for the distance to the closest 
-        self.dist_score()
 
         max_idx = np.argmax(self.scores)
+        ## check if the trajectory is valid, if not use the second best trajectory
+
         i, j = np.unravel_index(max_idx, scores.shape)
         if not( i == 0 and j == 0):
             self.selected_states = self.states[i, j] 
+        # elif self.distance_to_robot(self.goal) < 0.1:
+        #     self.selected_states = [0,0,0,0,0]
         else:
             self.selected_states = [0,0,0,0,0] # stop the robot if every state is invalid
 
@@ -265,36 +322,20 @@ class DWANode:
         yi = y + v * np.sin(theta_i) * dt   
         return xi, yi, theta_i
 
-    def dist_score(self):
-        obs_states = []
-        fine_states = []
-        distances = []
-        
-        for i in range(self.states.shape[0]):
-            for j in range(self.states.shape[1]):
-                state = self.states[i, j]
-                #
-                if self.scores[i, j] < 0:
-                    obs_states.append(state)
-                else:
-                    fine_states.append(state)
-        if len(obs_states) > 0:
-            for obs_state in obs_states:
-                distance = self.distance_to_robot(np.array(obs_state[:2]))
-                distances.append([obs_state[0], obs_state[1], distance])
-            
-            closest_obs = max(distances, key=lambda x: x[2])
-            self.closest_obs = closest_obs
-            
-            for i, s in enumerate(self.states):
-                for j, element in enumerate(s):
-
-                    if np.all(self.scores[i, :] < 0):
-                        print("obstacle states")
-                        continue
-                    else:
-                        dist_to_closest_obs = np.linalg.norm(np.array(element[:2]) - np.array(closest_obs[:2]))
-                        self.scores[i, :] =  self.scores[i, :] + dist_to_closest_obs/ self.distance_bias
+    def dist_score(self, state): 
+        score = 0
+        min_distance = float('inf')
+        for obs in self.close_obs_list:
+            dist = np.linalg.norm(np.array(state[:2]) - np.array(obs))
+            ## if state is too close to obstacle, return -999
+            if dist < 0.15:
+                score =  -999
+                return score
+            else:
+                min_distance = min(min_distance, dist)
+        # score = (min_distance - 1.92) / (3 - 1.92) 
+        score = 1
+        return score
 
 
     def heading_score(self,point):
@@ -354,15 +395,15 @@ class DWANode:
     def visualize_states(self):
         
         marker = Marker()
-        marker.header.frame_id = self.current_gridmap.header.frame_id  # Marker's reference frame
+        marker.header.frame_id = self.world_frame  # Marker's reference frame
         marker.header.stamp = rospy.Time.now()
         marker.ns = "viewpoint"  # Namespace to avoid conflicts
         marker.id = 0  # Marker ID
         marker.type = Marker.SPHERE_LIST  # Type of marker (SPHERE_LIST)
         marker.action = Marker.ADD  # Action to take (ADD, DELETE, etc.)
-        marker.scale.x = 0.05  # Scale (diameter along x-axis)
-        marker.scale.y = 0.05  # Scale (diameter along y-axis)
-        marker.scale.z = 0.0  # Scale (diameter along z-axis)
+        marker.scale.x = 0.05  
+        marker.scale.y = 0.05  
+        marker.scale.z = 0.0  
         marker.color.a = 1.0  # Alpha (transparency)
         marker.color.r = 0.0  # Red component
         marker.color.g = 0.0  # Green component
@@ -393,30 +434,39 @@ class DWANode:
 
 
     def publish_closest_obs(self):
-        if self.closest_obs is not None:    
-            marker = Marker()
-            marker.header.frame_id = "odom"
-            marker.type = marker.SPHERE
-            marker.action = marker.ADD
+        marker = Marker()
+        marker.header.frame_id = self.world_frame   
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "obstacle"  
+        marker.id = 0  # Marker ID
+        marker.type = Marker.SPHERE_LIST  
+        marker.action = Marker.ADD  
+        marker.scale.x = 0.05  
+        marker.scale.y = 0.05  
+        marker.scale.z = 0.0  
+        marker.color.a = 1.0  
+        marker.color.r = 0.0  
+        marker.color.g = 0.0  
+        marker.color.b = 1.0  
+        marker.lifetime = rospy.Duration()  
+        marker.pose = Pose()
 
-            # x, y = self.__map_to_position__(f,res,orig)
-            # print("aaaaaa", x ,y)
-            marker.header.stamp = rospy.Time.now()
-            marker.pose.position.x = self.closest_obs[0]
-            marker.pose.position.y = self.closest_obs[1]
-            
-            marker.scale.x = 0.1
-            marker.scale.y = 0.1
-            marker.scale.z = 0.1
+        sphere_points = []
+        colors = []
+        # print(len(self.close_obs_list))
+        for i, state in enumerate(self.close_obs_list):
+            point = Point()
+            point.x = state[0]  
+            point.y = state[1]  
+            # print(point.x,point.y)
+            point.z = 0.0  
+            sphere_points.append(point)
+            color = ColorRGBA(r=0, g=1, b=0, a=1)
+            colors.append(color)
 
-            marker.color.g = 1
-            marker.color.r = 0
-            marker.color.b = 0.7
-            marker.color.a = 1
-
-            self.closest_obs_pub.publish(marker)
-        else:
-            rospy.logwarn("closest_obs is None")
+        marker.points = sphere_points
+        marker.colors = colors
+        self.closest_obs_pub.publish(marker)
 
     def visualize_trajectories(self):
         marker_msg = Marker()
