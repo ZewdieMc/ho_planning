@@ -33,12 +33,11 @@ class DWANode:
         self.v_res = 0.05
         self.w_res = 0.05
 
-        self.goal_heading_bias = 10.0
-        self.clearance_bias = 1
-        self.velocity_bias = 5
-        self.distance_bias = 10
+        self.goal_heading_bias = 3.0
+        self.clearance_bias = 6
+        self.velocity_bias = 2
 
-        self.window_size = 0.5 # m
+        self.window_size = 1.0 # m
         self.map_update_interval = 0.5
         self.enable_visualization = True
         self.ned = True
@@ -148,8 +147,6 @@ class DWANode:
             
             self.action_rate.sleep()
             
-            
-        
         self.reset_robot()
         if success:
             rospy.loginfo('Succeeded')
@@ -283,13 +280,11 @@ class DWANode:
                 # optimization function G(v, w) = alpha * heading_score + beta * clearance_score + gamma * velocity_score
                 score = 2.0 * (self.goal_heading_bias * self.heading_score(state) + \
                         self.clearance_bias * self.dist_score(state) +\
-                        self.distance_bias * self.clearance_score(state) +\
                         self.velocity_bias * self.velocity_score(state,current_max_v,current_min_v))# +\
 
                 if v == 0.0:
                     score = 0
                 
-
                 if score >= 0 or v == 0:
                     scores[i,j] = score
                 else:
@@ -328,13 +323,12 @@ class DWANode:
         for obs in self.close_obs_list:
             dist = np.linalg.norm(np.array(state[:2]) - np.array(obs))
             ## if state is too close to obstacle, return -999
-            if dist < 0.15:
-                score =  -999
+            if dist < 0.2 or not self.svc.is_valid(state[:2]):
+                score =  -999            
                 return score
             else:
                 min_distance = min(min_distance, dist)
-        # score = (min_distance - 1.92) / (3 - 1.92) 
-        score = 1
+        score = min_distance
         return score
 
 
@@ -355,14 +349,18 @@ class DWANode:
         #I want to score -999 for points very close to point as well
         else:
             clearance_score = 1
-            #invalid_points = get_invalid_points()
-        
-            # for invalid_point in invalid_points:
-            #     distance = ((invalid_point[0] - point[0])**2 + (invalid_point[1] - point[1])**2)**0.5
-            #     if distance < 2:
-            #         return -999
-                
+            
         return clearance_score
+    
+    def __send_commnd__(self, v, w):
+        cmd = Twist()
+        cmd.linear.x = np.clip(v, -self.v_max, self.v_max)
+        cmd.linear.y = 0
+        cmd.linear.z = 0
+        cmd.angular.x = 0
+        cmd.angular.y = 0
+        cmd.angular.z = np.clip(w, -self.w_max, self.w_max)
+        self.vel_pub.publish(cmd)
 
     def velocity_score(self,point, max_linear_velocity, min_linear_velocity):
         #worst is 0, best is 1

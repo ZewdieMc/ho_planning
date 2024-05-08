@@ -81,7 +81,7 @@ class Robot:
             self.left_wheel_vel = msg.velocity[0]
             self.left_wheel_rec = True
 
-        elif msg.name[0] == "turtlebot/kobuki/wheel_right_joint":
+        if msg.name[0] == "turtlebot/kobuki/wheel_right_joint":
             self.right_wheel_vel = msg.velocity[0]
 
             if self.left_wheel_rec:
