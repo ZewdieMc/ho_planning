@@ -1,0 +1,13 @@
+<launch>
+    <param name="~frame_id" type="string" value="world_ned" />
+
+    <!-- global path planner -->
+    <node pkg="ho_planning" type="global_path_planner_node.py" name="global_planner_node" output="screen"/>
+
+    <!-- DWA planner -->
+    <node pkg="ho_planning" type="dwa_node.py" name="dwa_node" output="screen"/>
+
+    <!-- SM 
+    <node pkg="ho_planning" type="dwa_node.py" name="dwa_node" output="screen"/> -->
+
+</launch>

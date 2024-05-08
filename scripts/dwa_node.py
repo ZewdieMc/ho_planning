@@ -22,21 +22,21 @@ class DWANode:
     def __init__(self, gridmap_topic, odom_topic):
         # Tuning Parameters 
         self.dt = 2.0
-        self.v_max = 0.2 # max linear vel
+        self.v_max = 0.15 # max linear vel
         self.v_min = 0.04 # min linear vel
         self.acc = 2.0 # linear acceleration
 
-        self.w_max = 1.5 # max angular vel
+        self.w_max = 1.9 # max angular vel
         self.w_min = 0.1 # min angular vel
         self.acc_ang = 0.4 # angular acceleration
         # resolutions
         self.v_res = 0.05
         self.w_res = 0.05
 
-        self.goal_heading_bias = 10.0
+        self.goal_heading_bias = 1
         self.clearance_bias = 1
-        self.velocity_bias = 5
-        self.distance_bias = 10
+        self.velocity_bias = 1
+        self.distance_bias = 2
 
         self.window_size = 0.5 # m
         self.map_update_interval = 0.5
@@ -52,11 +52,11 @@ class DWANode:
         self.current_vel  = [0,0]
         self.last_map_time = rospy.Time.now()
         self.active = False
-        self.action_rate = rospy.Rate(5)
+        self.action_rate = rospy.Rate(10)
         self.world_frame = "world_ned"
         self.close_obs_list = []
         self.current_gridmap = None
-
+        self.robot_is_stuck = False
         # ACTION SERVER
         self.server = actionlib.SimpleActionServer('follow_path', FollowPathAction, self.handle_follow_path, False)
         self.server.start()
@@ -77,7 +77,7 @@ class DWANode:
         self.tfListener = tf2_ros.TransformListener(self.tfBuffer)
 
 
-        rospy.Timer(rospy.Duration(0.1), self.control_loop)
+        # rospy.Timer(rospy.Duration(0.1), self.control_loop)
         
         self.closest_obs = None
         
@@ -135,7 +135,7 @@ class DWANode:
         self.active = True
         while not self.near_goal() and not rospy.is_shutdown():
      
-            if self.server.is_preempt_requested():
+            if self.server.is_preempt_requested() or self.robot_is_stuck:
                 rospy.logerr('Preemptted!!')
                 self.reset_robot()
                 self.server.set_preempted()
@@ -145,7 +145,7 @@ class DWANode:
             # fb = FollowPathFeedback()
             # fb.current_path = P
             # self.server.publish_feedback()
-            
+            self.control_loop()
             self.action_rate.sleep()
             
             
@@ -161,6 +161,7 @@ class DWANode:
         self.path = None
         self.goal = None
         self.active = False
+        self.robot_is_stuck = False
         self.vel_pub.publish(Twist(Vector3(0,0,0), Vector3(0,0,0)))
 
 
@@ -172,7 +173,7 @@ class DWANode:
         # print(data)
         data[:minidx] = 0
         data[maxidx:] = 0
-        data[data > self.window_size + 0.2] = 0
+        data[data > self.window_size] = 0
         lidar_msg.ranges = list(data)
 
         transformStamped = self.tfBuffer.lookup_transform(self.world_frame, msg.header.frame_id, rospy.Time(0), rospy.Duration(1.0))
@@ -222,22 +223,22 @@ class DWANode:
     ##################################################################
     #### Alogorithm Functions
     ##################################################################
-    def control_loop(self, _):
-        if self.active:
-            # try:    
-            self.update_goal_from_path()
-            if self.goal and self.svc.there_is_map:
+    def control_loop(self):
+        
+        # try:    
+        self.update_goal_from_path()
+        if self.goal and self.svc.there_is_map:
+            
+            self.v_array,self.w_array = self.generate_velocity_array()
+            v,w = self.compute_velocity(self.v_array,self.w_array)
+            if self.ned:
+                # if w> 0:
+                #     w = max(w, 1)
+                # elif w< 0:
+                #     w = min(w, -1)
+                self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
                 
-                self.v_array,self.w_array = self.generate_velocity_array()
-                v,w = self.compute_velocity(self.v_array,self.w_array)
-                if self.ned:
-                    # if w> 0:
-                    #     w = max(w, 1)
-                    # elif w< 0:
-                    #     w = min(w, -1)
-                    self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
-                    
-                    self.visualize()
+                self.visualize()
                
 
     def generate_velocity_array(self ):
@@ -282,8 +283,8 @@ class DWANode:
                 states[i,j] = state
                 # optimization function G(v, w) = alpha * heading_score + beta * clearance_score + gamma * velocity_score
                 score = 2.0 * (self.goal_heading_bias * self.heading_score(state) + \
-                        self.clearance_bias * self.dist_score(state) +\
-                        self.distance_bias * self.clearance_score(state) +\
+                        self.distance_bias * self.dist_score(state) +\
+                        self.clearance_bias * self.clearance_score(state) +\
                         self.velocity_bias * self.velocity_score(state,current_max_v,current_min_v))# +\
 
                 if v == 0.0:
@@ -313,6 +314,7 @@ class DWANode:
         #     self.selected_states = [0,0,0,0,0]
         else:
             self.selected_states = [0,0,0,0,0] # stop the robot if every state is invalid
+            self.robot_is_stuck = True
 
         return self.selected_states[3], self.selected_states[4]
     
@@ -324,7 +326,7 @@ class DWANode:
 
     def dist_score(self, state): 
         score = 0
-        min_distance = float('inf')
+        min_distance = 1.5-0.15
         for obs in self.close_obs_list:
             dist = np.linalg.norm(np.array(state[:2]) - np.array(obs))
             ## if state is too close to obstacle, return -999
@@ -333,8 +335,8 @@ class DWANode:
                 return score
             else:
                 min_distance = min(min_distance, dist)
-        # score = (min_distance - 1.92) / (3 - 1.92) 
-        score = 1
+        score = (min_distance - 0.15) / (1.5 - 0.15) 
+        print(score)
         return score
 
 
