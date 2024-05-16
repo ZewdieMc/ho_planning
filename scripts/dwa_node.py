@@ -21,24 +21,24 @@ from tf2_geometry_msgs import do_transform_point
 class DWANode:
     def __init__(self, gridmap_topic, odom_topic):
         # Tuning Parameters 
-        self.dt = 2.0
-        self.v_max = 0.15 # max linear vel
+        self.dt = 4.0
+        self.v_max = 0.25 # max linear vel
         self.v_min = 0.04 # min linear vel
         self.acc = 2.0 # linear acceleration
 
         self.w_max = 1.9 # max angular vel
         self.w_min = 0.1 # min angular vel
-        self.acc_ang = 0.4 # angular acceleration
+        self.acc_ang = 0.05 # angular acceleration
         # resolutions
         self.v_res = 0.05
         self.w_res = 0.05
 
-        self.goal_heading_bias = 1
+        self.goal_heading_bias = 2.0 # 2
         self.clearance_bias = 1
         self.velocity_bias = 1
-        self.distance_bias = 2
+        self.distance_bias = 1.2 # 1.2
 
-        self.window_size = 0.5 # m
+        self.window_size = 1.0 # m 0.5
         self.map_update_interval = 0.5
         self.enable_visualization = True
         self.ned = True
@@ -171,24 +171,30 @@ class DWANode:
         filtered_ranges, minidx, maxidx = self.filter_lidar(msg)
         data = np.array(msg.ranges)
         # print(data)
-        data[:minidx] = 0
-        data[maxidx:] = 0
-        data[data > self.window_size] = 0
+        # data[:minidx] = 0
+        # data[maxidx:] = 0
+        # data[:100] = 0
+        # data[-100:] = 0
+        data[data > self.window_size + 0.3] = 0
+        data[data < 0.2] = 0
+
         lidar_msg.ranges = list(data)
 
         transformStamped = self.tfBuffer.lookup_transform(self.world_frame, msg.header.frame_id, rospy.Time(0), rospy.Duration(1.0))
         obs_list = []
-        for i,range in enumerate(lidar_msg.ranges):
-            if range != 0:
+        for i in range(len(lidar_msg.ranges)):
+            r = lidar_msg.ranges[i]
+            if r != 0:
                 angle = msg.angle_min + i * msg.angle_increment
-                x = range * cos(angle)
-                y = range * sin(angle)
+                x = r * cos(angle)
+                y = r * sin(angle)
                 input_pose = PoseStamped()
                 input_pose.header = msg.header
                 input_pose.pose.position.x = x
                 input_pose.pose.position.y = y
                 input_pose.pose.position.z = 0
                 output_pose = tf2_geometry_msgs.do_transform_pose(input_pose, transformStamped)
+                # output_pose = input_pose
                 obs_list.append([output_pose.pose.position.x, output_pose.pose.position.y])
 
         self.scan_pub.publish(lidar_msg)
@@ -232,10 +238,10 @@ class DWANode:
             self.v_array,self.w_array = self.generate_velocity_array()
             v,w = self.compute_velocity(self.v_array,self.w_array)
             if self.ned:
-                # if w> 0:
-                #     w = max(w, 1)
-                # elif w< 0:
-                #     w = min(w, -1)
+                if w> 0:
+                    w = max(w, 1.0)
+                elif w< 0:
+                    w = min(w, -1.0)
                 self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
                 
                 self.visualize()
@@ -284,7 +290,7 @@ class DWANode:
                 # optimization function G(v, w) = alpha * heading_score + beta * clearance_score + gamma * velocity_score
                 score = 2.0 * (self.goal_heading_bias * self.heading_score(state) + \
                         self.distance_bias * self.dist_score(state) +\
-                        self.clearance_bias * self.clearance_score(state) +\
+                        # self.clearance_bias * self.clearance_score(state) +\
                         self.velocity_bias * self.velocity_score(state,current_max_v,current_min_v))# +\
 
                 if v == 0.0:
@@ -330,13 +336,12 @@ class DWANode:
         for obs in self.close_obs_list:
             dist = np.linalg.norm(np.array(state[:2]) - np.array(obs))
             ## if state is too close to obstacle, return -999
-            if dist < 0.15:
+            if dist < 0.2:
                 score =  -999
                 return score
             else:
                 min_distance = min(min_distance, dist)
-        score = (min_distance - 0.15) / (1.5 - 0.15) 
-        print(score)
+        score = (min_distance - 0.2) / (1.5 - 0.2) 
         return score
 
 
@@ -437,7 +442,7 @@ class DWANode:
 
     def publish_closest_obs(self):
         marker = Marker()
-        marker.header.frame_id = self.world_frame   
+        marker.header.frame_id = self.world_frame
         marker.header.stamp = rospy.Time.now()
         marker.ns = "obstacle"  
         marker.id = 0  # Marker ID
@@ -510,7 +515,7 @@ class DWANode:
         return np.linalg.norm(np.array(self.current_pose[:2] -p) )
     
     def near_goal(self):
-        return np.linalg.norm(np.array(self.current_pose[:2] -self.path[-1]) ) < 0.15
+        return np.linalg.norm(np.array(self.current_pose[:2] -self.path[-1]) ) < 0.2
 
 
 def wrap_angle(angle):

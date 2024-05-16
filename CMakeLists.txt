@@ -53,6 +53,8 @@ find_package(catkin REQUIRED genmsg actionlib_msgs message_generation nav_msgs)
 add_service_files(
   FILES
   GetGlobalPlan.srv
+  GetNBVP.srv
+  GetViewPoints.srv
 )
 
 # Generate actions in the 'action' folder

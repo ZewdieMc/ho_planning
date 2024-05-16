@@ -2,7 +2,7 @@
 
 import rospy
 import numpy as np
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Twist, Vector3
 import smach
 from visualization_msgs.msg import Marker, MarkerArray
 from utils.global_planner import StateValidityChecker
@@ -19,8 +19,8 @@ from geometry_msgs.msg import PoseStamped
 from utils.global_planner import StateValidityChecker
 import actionlib
 from ho_planning.msg import FollowPathAction, FollowPathGoal, FollowPathResult
-from ho_planning.srv import GetGlobalPlan, GetGlobalPlanRequest, GetGlobalPlanResponse
-
+from ho_planning.srv import GetGlobalPlan, GetGlobalPlanRequest, GetGlobalPlanResponse, GetViewPoints, GetViewPointsRequest
+from std_srvs.srv import SetBool, Trigger
 
 global black_board
 
@@ -57,8 +57,8 @@ class FindPath(smach.State):
     '''
     def __init__(self):
         global black_board
-        smach.State.__init__(self, outcomes=['path_found','plan_fail'])
-        self.retries = 5
+        smach.State.__init__(self, outcomes=['path_found','plan_fail','preempted'])
+        self.retries = 2
 
     def execute(self, userdata):
         global black_board
@@ -69,16 +69,44 @@ class FindPath(smach.State):
         # Call global planner service
         for i in range(self.retries): 
             black_board.path = black_board.get_global_plan()
+
+            if black_board.is_prempt_requested:
+                return 'preempted'
+
             if black_board.path:
                 rospy.loginfo('Path found')
                 return 'path_found'
             
         return 'plan_fail'
+
+class AdjustHeading(smach.State):
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['adjust_success','preempted'])
+        
+    
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state ADJUST HEADING')
+        black_board.stop_robot()
+        black_board.adjust_heading()
+
+        if black_board.is_prempt_requested:
+                rospy.logerr('Preempt requested')
+                black_board.client.cancel_goal()
+                black_board.stop_robot()
+                black_board.path = None
+                return 'preempted'
+
+        
+        return'adjust_success'
+      
     
 class FollowPath(smach.State):
     def __init__(self):
         global black_board
-        smach.State.__init__(self, outcomes=['goal_reached','robot_stuck','invalid_path'])
+        smach.State.__init__(self, outcomes=['goal_reached','robot_stuck','invalid_path','preempted'])
     
 
     def execute(self, userdata):
@@ -86,9 +114,23 @@ class FollowPath(smach.State):
         rospy.loginfo('Executing state FOLLOW_PATH')
         black_board.stop_robot()
 
+        if not black_board.path:
+            rospy.logwarn('Path not valid anymore')
+            black_board.stop_robot()
+            black_board.client.cancel_goal()
+            black_board.path = None
+            return 'invalid_path'
+            
         # Send command through action server
         black_board.send_action()
         while black_board.path and not rospy.is_shutdown():
+            if black_board.is_prempt_requested:
+                rospy.logerr('Preempt requested')
+                black_board.client.cancel_goal()
+                black_board.stop_robot()
+                black_board.path = None
+                return 'preempted'
+
             if black_board.client.get_state() == actionlib.GoalStatus.PREEMPTED :
                 rospy.logerr('Robot Stuck')
                 black_board.client.cancel_goal()
@@ -113,7 +155,7 @@ class FollowPath(smach.State):
 class Recovering(smach.State):
     def __init__(self):
         global black_board
-        smach.State.__init__(self, outcomes=['recover_success','recover_fail'])
+        smach.State.__init__(self, outcomes=['recover_success','recover_fail','preempted'])
         
     
 
@@ -123,6 +165,13 @@ class Recovering(smach.State):
         black_board.stop_robot()
         black_board.back_off()
 
+        if black_board.is_prempt_requested:
+                rospy.logerr('Preempt requested')
+                black_board.client.cancel_goal()
+                black_board.stop_robot()
+                black_board.path = None
+                return 'preempted'
+
         if black_board.svc.is_valid(black_board.current_pose[:2]):
             rospy.loginfo('Robot is valid')
             return'recover_success'
@@ -130,6 +179,45 @@ class Recovering(smach.State):
             rospy.logerr('Robot is still stuck')
             return'recover_fail'
 
+class FindNbvp(smach.State):
+    '''
+    State for finding global paths
+    '''
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['nbvp_found','nbvp_fail','preempted'])
+        self.retries = 5
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state FIND_NBVP')
+        black_board.path = None
+        black_board.goal = None
+        black_board.viewpoints = None
+        # only remember nbvp
+        black_board.stop_robot()
+
+        # Call nbvp service
+        black_board.viewpoints = black_board.get_viewpoints()
+        for i in range(len(black_board.viewpoints)): 
+            nbvp = black_board.viewpoints[i]
+            if black_board.nbvp is not None:
+                if not np.linalg.norm(nbvp - black_board.nbvp) < 0.05: # check if the viewpoint is the same as last loop
+                    black_board.nbvp = nbvp
+                    black_board.goal = nbvp
+            else:
+                black_board.nbvp = nbvp
+                black_board.goal = nbvp
+                    
+
+            if black_board.is_prempt_requested:
+                return 'preempted'
+
+            if black_board.goal is not None:
+                rospy.loginfo('NBVP found')
+                return 'nbvp_found'
+            
+        return 'nbvp_fail'
         
 
         
@@ -141,12 +229,14 @@ class StateBlackBoard:
         # Shared Variable
         self.goal = None
         self.nbvp = None
+        self.viewpoints = None
         self.path = None
         self.current_pose = None
         
         # Flags
         self.movebase_recieved = False
         self.start_exploration = False
+        self.is_prempt_requested = False
         
 
         # Grid map
@@ -157,8 +247,11 @@ class StateBlackBoard:
         # Vel Publisher
         self.vel_pub = rospy.Publisher('/cmd_vel',Twist, queue_size=10)
 
+
         # Path marker
         self.marker_pub = rospy.Publisher('~path_marker', Marker, queue_size=1)
+        self.nbvp_pub = rospy.Publisher('~nbvp',Marker,queue_size=1)
+
 
         # Subscribers
         #?subscriber to gridmap_topic from Octomap Server  
@@ -168,10 +261,16 @@ class StateBlackBoard:
         # ?subscriber to /move_base_simple/goal published by rviz
         self.move_goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.get_goal)    
 
+        # Preempted Service
+        self.stop_srv = rospy.Service('/stop_state_machine', SetBool, self.handle_stop_srv)
+
         # ACTION CLIENT
         self.client = actionlib.SimpleActionClient('follow_path', FollowPathAction)
         rospy.loginfo("Waiting for DWA Server to connect")
         self.client.wait_for_server()
+
+        # Exploration Service
+        rospy.Service("/start_exploration",SetBool, self.handle_start_exploration)
 
         # Visualization
         rospy.Timer(rospy.Duration(2),self.visualization)
@@ -205,7 +304,7 @@ class StateBlackBoard:
     def get_gridmap(self, gridmap):
       
         # To avoid map update too often (change value '1' if necessary)
-        if (gridmap.header.stamp - self.last_map_time).to_sec() > 2:            
+        if (gridmap.header.stamp - self.last_map_time).to_sec() > 10:            
             self.last_map_time = gridmap.header.stamp
 
             self.current_gridmap = gridmap
@@ -219,10 +318,18 @@ class StateBlackBoard:
 
             self.bounds = [origin[0] - 0.5 , origin[0] + map_height + 0.5  , origin[1] - 0.5 , origin[1] + map_width + 0.5 ]
             
-            if self.path is not None:
-                if not self.svc.check_path(self.path):
-                    rospy.logerr("Path not valid anymore")
-                    self.path = None 
+            # if self.path is not None:
+            #     if not self.svc.check_path(self.path):
+            #         rospy.logerr("Path not valid anymore")
+            #         self.path = None 
+
+    def handle_stop_srv(self,req):
+        rospy.logwarn("Stop stat machine triggered")
+        self.is_prempt_requested = True
+        self.stop_robot()
+
+    def handle_start_exploration(self,req):
+        self.start_exploration = True
 
     ###############################
     ### Service caller
@@ -251,7 +358,27 @@ class StateBlackBoard:
         except rospy.ServiceException as e:
             print(f"Service call failed: {e}")
             return None
+    
 
+    def get_viewpoints(self):
+        rospy.logwarn("Calling get viewpointsn")
+        rospy.wait_for_service('get_viewpoints')
+        viewpoints = []
+        try:
+            get_vp = rospy.ServiceProxy('get_viewpoints', GetViewPoints)
+            req = GetViewPointsRequest()
+        
+
+            resp = get_vp(req)
+            # rospy.logwarn("matching: {}".format(resp.transform))
+            for i in range(len(resp.viewpoints_x)):
+                viewpoints.append(np.array([resp.viewpoints_x[i], resp.viewpoints_y[i]]))
+    
+            return viewpoints
+        
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+            return None
 
 
     ###############################
@@ -296,12 +423,34 @@ class StateBlackBoard:
         
         self.vel_pub.publish(cmd) # stop the robot
 
+    def adjust_heading(self):
+        cmd = Twist()
+        start_time = rospy.Time.now()
+        goal = self.path[1]
+
+        while not rospy.is_shutdown() and rospy.Time.now() - start_time < rospy.Duration(10):
+            psi_d = np.arctan2(goal[1] - self.current_pose[1], goal[0] - self.current_pose[0])
+            psi = wrap_angle(psi_d - self.current_pose[2])
+
+            if abs(psi) < 0.3:
+                self.stop_robot()
+                break
+
+            cmd.angular.z = psi/abs(psi) * 1.0
+            self.vel_pub.publish(cmd)
+
+            
+            
+         
+        
+
     ###############################
     ### Utilities
     ###############################
     def reset_flags(self):
         self.movebase_recieved = False
         self.start_exploration = False
+        self.is_prempt_requested = False
 
     def discretize_path(self,path):
         result_path = Path()
@@ -334,6 +483,7 @@ class StateBlackBoard:
     
     def visualization(self,_):
         self.publish_path()
+        self.visualize_nbvp()
 
     def publish_path(self):
         if self.path:
@@ -380,8 +530,32 @@ class StateBlackBoard:
             
             self.marker_pub.publish(m)
 
-        
+    def visualize_nbvp(self):
+        if self.nbvp is not None:
+            marker = Marker()
+            marker.header.frame_id = self.current_gridmap.header.frame_id
+            marker.header.stamp = rospy.Time.now()
+            marker.ns = "nbvp"
+            marker.id = 0
+            marker.type = Marker.ARROW
+            marker.action = Marker.ADD
+            marker.pose.position = Point(self.nbvp[0], self.nbvp[1], 0)
+            marker.pose.orientation.x = 0.0
+            marker.pose.orientation.y = 0.0
+            marker.pose.orientation.z = 0.0
+            marker.pose.orientation.w = 1.0
+            marker.scale = Vector3(1.0, 0.1, 0.1)  # arrow dimensions (length, width, height)
+            marker.color.a = 1.0  # alpha
+            marker.color.r = 0.0  # red
+            marker.color.g = 1.0  # green
+            marker.color.b = 0.0  # blue
 
+
+            self.nbvp_pub.publish(marker)
+
+        
+def wrap_angle(angle):
+    return (angle + ( 2.0 * np.pi * np.floor( ( np.pi - angle ) / ( 2.0 * np.pi ) ) ) )
 
 # main
 def main():
@@ -397,43 +571,56 @@ def main():
         # Add states to the container
         smach.StateMachine.add('IDLE', IDLE(), 
                                transitions={'goal_recieved':'MOVEBASE', 
-                                            'start_exploration':'state_end',
+                                            'start_exploration':'EXPLORATION',
                                             'state_end':'state_end'})
         movebase_sm = smach.StateMachine(outcomes=['movebase_end'])
         with movebase_sm:
             smach.StateMachine.add('FIND_PATH', FindPath(), 
-                               transitions={'path_found':'FOLLOW_PATH', 
-                                            'plan_fail':'movebase_end'})
+                               transitions={'path_found':'ADJUST_HEADING', 
+                                            'plan_fail':'movebase_end',
+                                            'preempted':'movebase_end' })
+            smach.StateMachine.add('ADJUST_HEADING', AdjustHeading(), 
+                               transitions={'adjust_success':'FOLLOW_PATH', 
+                                            'preempted':'movebase_end'})
             smach.StateMachine.add('FOLLOW_PATH', FollowPath(), 
                                transitions={'goal_reached':'movebase_end', 
                                             'robot_stuck':'RECOVERING',
-                                            'invalid_path':'FIND_PATH'})
+                                            'invalid_path':'FIND_PATH',
+                                            'preempted':'movebase_end'})
             smach.StateMachine.add('RECOVERING', Recovering(), 
                                transitions={'recover_success':'FIND_PATH', 
-                                            'recover_fail':'movebase_end'})
+                                            'recover_fail':'movebase_end',
+                                            'preempted':'movebase_end'})
             
 
-        # explo_sm = smach.StateMachine(outcomes=['explo_end'])
+        explo_sm = smach.StateMachine(outcomes=['explo_end'])
         
-        # with explo_sm:
-        #     smach.StateMachine.add('FIND_NBVP', FindNbvp(black_board), 
-        #                        transitions={'nbvp_found':'FIND_PATH', 
-        #                                     'nbvp_fail':'explo_end'})
-        #     smach.StateMachine.add('FIND_PATH', FindPath(black_board), 
-        #                        transitions={'path_found':'FOLLOW_PATH', 
-        #                                     'plan_fail':'FIND_NBVP'})
-        #     smach.StateMachine.add('FOLLOW_PATH', FollowPath(black_board), 
-        #                        transitions={'goal_reach':'movebase_end', 
-        #                                     'robot_stuck':'RECOVERING',
-        #                                     'invalid_path':'FIND_PATH'})
-        #     smach.StateMachine.add('RECOVERING', Recovering(black_board), 
-        #                        transitions={'recover_success':'FIND_PATH', 
-        #                                     'recover_fail':'movebase_end'})
+        with explo_sm:
+            smach.StateMachine.add('FIND_NBVP', FindNbvp(), 
+                               transitions={'nbvp_found':'FIND_PATH', 
+                                            'nbvp_fail':'explo_end',
+                                            'preempted':'explo_end'})
+            smach.StateMachine.add('FIND_PATH', FindPath(), 
+                               transitions={'path_found':'ADJUST_HEADING', 
+                                            'plan_fail':'FIND_NBVP',
+                                            'preempted':'explo_end' })
+            smach.StateMachine.add('ADJUST_HEADING', AdjustHeading(), 
+                               transitions={'adjust_success':'FOLLOW_PATH', 
+                                            'preempted':'explo_end'})
+            smach.StateMachine.add('FOLLOW_PATH', FollowPath(), 
+                               transitions={'goal_reached':'FIND_NBVP', 
+                                            'robot_stuck':'RECOVERING',
+                                            'invalid_path':'FIND_PATH',
+                                            'preempted':'explo_end'})
+            smach.StateMachine.add('RECOVERING', Recovering(), 
+                               transitions={'recover_success':'FIND_NBVP', 
+                                            'recover_fail':'explo_end',
+                                            'preempted':'explo_end'})
             
         smach.StateMachine.add('MOVEBASE', movebase_sm, 
                                transitions={'movebase_end':'IDLE'})
-        # smach.StateMachine.add('EXPLORATION', explo_sm, 
-        #                        transitions={'explo_end':'IDLE'})
+        smach.StateMachine.add('EXPLORATION', explo_sm, 
+                               transitions={'explo_end':'IDLE'})
             
 
     # Execute SMACH plan
