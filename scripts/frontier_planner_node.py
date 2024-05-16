@@ -10,6 +10,7 @@ from numpy import cos, sin
 from utils.state_validity_checker import StateValidityChecker
 import tf
 from exploration import find_frontiers_conv, cluster_frontiers
+from ho_planning.srv import GetNBVP,  GetNBVPResponse, GetViewPoints, GetViewPointsResponse
 
 class FrontierPlanner:
     def __init__(self, gridmap_topic, odom_topic):
@@ -40,7 +41,12 @@ class FrontierPlanner:
         self.odom_sub = rospy.Subscriber(odom_topic,Odometry, self.odom_cb) 
         self.gridmap_sub = rospy.Subscriber(gridmap_topic,OccupancyGrid, self.gridmap_cb) 
 
-        rospy.Timer(rospy.Duration(2), self.executoion_loop)
+        # Service 
+        rospy.Service("/get_nbvp", GetNBVP, self.handle_get_nbvp )
+        rospy.Service("/get_viewpoints", GetViewPoints, self.handle_get_viewpoints)
+
+
+        #rospy.Timer(rospy.Duration(2), self.executoion_loop)
         
 
         
@@ -108,6 +114,30 @@ class FrontierPlanner:
 
         else:
             pass
+
+    def handle_get_nbvp(self, req):
+        resp = GetNBVPResponse()
+
+        pose_msg = Pose()
+        pose_msg.position.x = self.nbvp[0]
+        pose_msg.position.y = self.nbvp[1]
+        resp.nbvp = pose_msg
+        return resp
+    
+    def handle_get_viewpoints(self, req):
+        resp = GetViewPointsResponse()
+
+        # sort viewpoints 
+        sorted_viewponts = [vp for _, vp in sorted(zip(self.viewpoints_score, self.viewpoints))]
+        sorted_viewponts = sorted_viewponts[::-1]
+
+        for vp in sorted_viewponts:
+            resp.viewpoints_x.append(vp[0])
+            resp.viewpoints_y.append(vp[1])
+
+        print(resp)
+        
+        return resp
 
 
     ##################################################################
@@ -180,8 +210,9 @@ class FrontierPlanner:
         scores = []
         for c in clusters:
             centroid_idx = np.median(np.array(c), axis=0)
+            
             centroid_pos = self.svc.__map_to_position__(centroid_idx)
-
+            
             if self.svc.is_valid(centroid_pos):
                 viewpoints.append([centroid_pos[0],centroid_pos[1]])
 
@@ -190,6 +221,7 @@ class FrontierPlanner:
                 scores.append(score)
 
         return viewpoints, scores
+    
     
     def find_nbvp(self, viewpoints, scores):
         if viewpoints:

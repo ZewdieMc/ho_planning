@@ -14,7 +14,6 @@ from geometry_msgs.msg import PoseStamped
 from utils.global_planner import StateValidityChecker, move_to_point, compute_path
 import actionlib
 from ho_planning.msg import FollowPathAction, FollowPathGoal, FollowPathResult
-from ho_planning.srv import GetGlobalPlan, GetGlobalPlanResponse
 class OnlinePlanner:
 
     # OnlinePlanner Constructor
@@ -35,86 +34,57 @@ class OnlinePlanner:
         # Dominion [min_x_y, max_x_y] in which the path planner will sample configurations                           
         self.bounds = bounds                                        
 
-        # # CONTROLLER PARAMETERS
-        # # Proportional linear velocity controller gain
-        # self.Kv = 2.5
-        # # Proportional angular velocity controller gain                   
-        # self.Kw = 5
-        # # Maximum linear velocity control action                   
-        # self.v_max = 0.15
-        # # Maximum angular velocity control action               
-        # self.w_max = 0.9           
+        # CONTROLLER PARAMETERS
+        # Proportional linear velocity controller gain
+        self.Kv = 2.5
+        # Proportional angular velocity controller gain                   
+        self.Kw = 5
+        # Maximum linear velocity control action                   
+        self.v_max = 0.15
+        # Maximum angular velocity control action               
+        self.w_max = 0.9           
 
-        # #Frontiers
-        # self.frontiers = []    
-        # self.centroids = []
+        #Frontiers
+        self.frontiers = []    
+        self.centroids = []
         self.current_gridmap = None
-        # # tree nodes and edges
+        # tree nodes and edges
         self.nodes = []
         self.parent = []
-        # # ACTION CLIENT
-        # self.client = actionlib.SimpleActionClient('follow_path', FollowPathAction)
-        # self.client.wait_for_server()
+        # ACTION CLIENT
+        self.client = actionlib.SimpleActionClient('follow_path', FollowPathAction)
+        self.client.wait_for_server()
 
-        # # PUBLISHERS
-        # #? Publisher for sending velocity commands to the robot
-        # self.path_pub = rospy.Publisher("/global_path",Path, queue_size=10)
-        # #? Publisher for visualizing the path to with rviz
-        # self.marker_pub = rospy.Publisher('~path_marker', Marker, queue_size=1)
-        self.node_pub = rospy.Publisher('~rrt_nodes', Marker, queue_size=1)
-        self.edge_pub = rospy.Publisher('~rrt_edges', Marker, queue_size=1)
-        self.bounds_pub = rospy.Publisher('~rrt_bounds', Marker, queue_size=1)
+        # PUBLISHERS
+        #? Publisher for sending velocity commands to the robot
+        self.cmd_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1)
+        self.path_pub = rospy.Publisher("/global_path",Path, queue_size=10)
+        #? Publisher for visualizing the path to with rviz
+        self.marker_pub = rospy.Publisher('~path_marker', Marker, queue_size=1)
+        self.centroid_pub = rospy.Publisher('~centroids',Marker,queue_size=1)
+
+        self.node_pub = rospy.Publisher('rrt_nodes', Marker, queue_size=1)
+        self.edge_pub = rospy.Publisher('rrt_edges', Marker, queue_size=1)
+        self.bounds_pub = rospy.Publisher('rrt_bounds', Marker, queue_size=1)
 
 
 
-        # #Frontier publisher
-        # self.frontier_pub = rospy.Publisher('~frontiers', MarkerArray, queue_size=1)
-        # self.waypoints_pub = rospy.Publisher('/waypoints',PoseStamped,queue_size=10)
+        #Frontier publisher
+        self.frontier_pub = rospy.Publisher('~frontiers', MarkerArray, queue_size=1)
+        self.waypoints_pub = rospy.Publisher('/waypoints',PoseStamped,queue_size=10)
 
         # SUBSCRIBERS
         #?subscriber to gridmap_topic from Octomap Server  
         self.gridmap_sub = rospy.Subscriber(gridmap_topic, OccupancyGrid, self.get_gridmap)
-        self.global_plan_srv = rospy.Service('get_global_plan', GetGlobalPlan, self.handle_get_global_plan)
-
-        # #?subscriber to odom_topic  
+        #?subscriber to odom_topic  
         self.odom_sub = rospy.Subscriber(odom_topic, Odometry, self.get_odom)
         # ?subscriber to /move_base_simple/goal published by rviz
-        # self.move_goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.get_goal)    
+        self.move_goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.get_goal)    
         
         # TIMERS
         # Timer for velocity controller
-        # rospy.Timer(rospy.Duration(0.1), self.dwa_controller)
+        rospy.Timer(rospy.Duration(0.1), self.dwa_controller)
         rospy.Timer(rospy.Duration(1), self.visualize)
-
-
-    def handle_get_global_plan(self, req):
-        goal = np.array([req.goal_x, req.goal_y])
-        resp = GetGlobalPlanResponse()
-
-        if not self.svc.is_valid(goal):
-            rospy.logerr("Goal is not valid, unable to plan a path")
-            resp.success = False
-            return resp
-
-
-        rospy.loginfo("Computing new path")
-        self.path, parents, nodes = compute_path(self.current_pose[0:2],goal, self.svc, self.bounds, 1.0)
-        self.copy_path = self.path.copy()
-        if len(self.path) > 0:
-            self.nodes = nodes
-            self.parent = parents
-        else:
-            resp.success = False
-            rospy.logerr("No path found")
-            return resp
-        
-        resp.success = True
-        for i in range(len(self.path)):
-            resp.path_x.append(self.path[i][0])
-            resp.path_y.append(self.path[i][1])
-        
-        rospy.loginfo("Path found")
-        return resp
 
     # Odometry callback: Gets current robot pose and stores it into self.current_pose
     def get_odom(self, odom):
@@ -161,7 +131,33 @@ class OnlinePlanner:
             map_width = self.svc.map.shape[1] * self.svc.resolution
 
             self.bounds = [origin[0] - 0.5 , origin[0] + map_height + 0.5  , origin[1] - 0.5 , origin[1] + map_width + 0.5 ]
+            #! centroids
+            #! self.centroids, self.frontiers = exploration.cluster_frontiers(self.frontiers)
+            # rospy.loginfo("Centroid Index: %d", len(self.frontiers))
+
+            #! Publish frontiers
+            # self.publish_frontiers()
             
+            #! Publish centroids
+            # self.publish_centroids()
+            # print("#Centroids: ", len(self.centroids))
+            # If the robot is following a path, check if it is still valid
+            if self.path is not None and len(self.path) > 0:
+                # create total_path adding the current position to the rest of waypoints in the path
+                # print("current pose:", self.current_pose[0:2])
+                # print("path:", self.path)
+                total_path = [self.current_pose[0:2]] + self.path
+                # TODO: check total_path validity. If total_path is not valid replan
+                if not self.svc.check_path(total_path):
+                    rospy.logerr("Path not valid anymore, replanning")
+                    self.client.cancel_goal()
+                    self.path = [] 
+                    self.plan()
+                    if self.path:
+                        self.send_action()
+                else:
+                    ...
+                    rospy.logwarn("Path still valid following it")
 
     def send_action(self):
         goal = FollowPathGoal()
@@ -181,9 +177,9 @@ class OnlinePlanner:
             return
 
         # Check if robot is collided with an obstacle
-        if self.robot_collided():
-            rospy.logerr("Robot is collided with an obstacle")
-            self.back_off()
+        # if self.robot_collided():
+        #     rospy.logerr("Robot is collided with an obstacle")
+        #     self.back_off()
 
         rospy.loginfo("Computing new path")
         # TODO: plan a path from self.current_pose to self.goal
@@ -523,11 +519,13 @@ class OnlinePlanner:
             self.bounds_pub.publish(marker)
 
     def visualize(self,a):
+        print(555)
 
         self.publish_bound()
         if self.nodes and self.parent:
             self.publish_edges()
             self.publish_nodes()
+            self.publish_path()
             
 
     def discretize_segment(self,start, end):

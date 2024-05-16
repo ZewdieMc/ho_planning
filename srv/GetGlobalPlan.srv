@@ -1,0 +1,6 @@
+float64 goal_x
+float64 goal_y
+---
+bool success
+float64[] path_x
+float64[] path_y

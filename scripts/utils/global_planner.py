@@ -154,10 +154,10 @@ class Planner:
         for _ in range(self.max_iterations):
             self.iterations += 1
             q_rand = q_goal if np.random.rand() < self.p_goal else self.random_configuration()
-            print("node count: ", len(self.nodes))
+            # print("node count: ", len(self.nodes))
 
             q_near, near_idx = self.nearest(q_rand)
-            print("ietration#: ", self.iterations)
+            # print("ietration#: ", self.iterations)
             # print("q_rand: ", q_rand)
             # print("nearest: ", q_near)
             q_new = self.steer(q_near, q_rand)
@@ -187,7 +187,7 @@ class Planner:
                         print("cost updated")
                     if np.allclose(q_new, q_goal, atol=0.001):
                         goal_found_counter += 1
-                        print("goal found")
+                        # print("goal found")
                     
                 else:         
                     self.nodes.append(q_new)
