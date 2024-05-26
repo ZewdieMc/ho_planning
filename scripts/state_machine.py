@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import rospy
 import numpy as np
@@ -356,7 +356,7 @@ class StateBlackBoard:
             return path
         
         except rospy.ServiceException as e:
-            print(f"Service call failed: {e}")
+            # print(f"Service call failed: {e}")
             return None
     
 
@@ -377,7 +377,7 @@ class StateBlackBoard:
             return viewpoints
         
         except rospy.ServiceException as e:
-            print(f"Service call failed: {e}")
+            # print(f"Service call failed: {e}")
             return None
 
 
