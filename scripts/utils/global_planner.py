@@ -154,15 +154,10 @@ class Planner:
         for _ in range(self.max_iterations):
             self.iterations += 1
             q_rand = q_goal if np.random.rand() < self.p_goal else self.random_configuration()
-            # print("node count: ", len(self.nodes))
-
+            
             q_near, near_idx = self.nearest(q_rand)
-            # print("ietration#: ", self.iterations)
-            # print("q_rand: ", q_rand)
-            # print("nearest: ", q_near)
             q_new = self.steer(q_near, q_rand)
-            # print("new: ", q_new)
-
+            
             if self.state_validity_checker.is_valid(q_new) and self.state_validity_checker.check_path([q_near, q_new]):
                 neighbors = self.near(q_new, q_goal)
                 min_cost = self.cost[near_idx] + np.linalg.norm(q_new - q_near)
@@ -187,7 +182,6 @@ class Planner:
                         print("cost updated")
                     if np.allclose(q_new, q_goal, atol=0.001):
                         goal_found_counter += 1
-                        # print("goal found")
                     
                 else:         
                     self.nodes.append(q_new)
@@ -202,19 +196,9 @@ class Planner:
                         self.cost[i] = self.cost[-1] + np.linalg.norm(self.nodes[i] - q_new)
                         
             if time.time() - time_start > self.time_limit:
-                print("============================================")
-                print("duplicate nodes: ", self.count_duplicates())
-                print("time span: ", time.time() - time_start)
-                print("goal found counter: ", goal_found_counter)
-                print("node found counter: ", node_found_counter)
-                print("other nodes: ", (node_found_counter - goal_found_counter))
-                print("============================================")
                 raw_path = self.build_path(q_goal)
                 smoothed_path = self.smooth_path(raw_path)
-                # if self.path_to_goal_found and len(smoothed_path) > 0:
                 return smoothed_path, self.parent, self.nodes
-                # else:
-                    # self.time_limit += 5
         return [], [], []
 
     def find_goal_index(self, q_goal):

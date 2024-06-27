@@ -9,12 +9,15 @@ def find_frontiers_conv(data):
     data_copy= np.where(data==-1,150,data) # replace -1 with 150
     data_copy= np.where(data==100,0,data_copy) # replace 100 with 0
     data_copy= np.where(data==0,255,data_copy) # replace 0 with 255
+
     # Define the convolution kernel
     kernel = np.array([[0, 1, 0], [1, 0, 1], [0, 1, 0]])
+
     # Convolve the data with the kernel
     conv = convolve2d(data_copy == 150, kernel, mode='same')
     conv2 = convolve2d(data_copy == 255, kernel, mode='same')
-    # Find the free cells that have an unknown neighbor or a free cell neighbor
+
+    # Find the free cells that have an unknown neighbor and a free cell neighbor
     frontiers = np.where((data_copy == 255) & ((conv > 0) & (conv2 > 0)))
     # Return the list of free cells in contact with unknown cells or free cells
     return list(zip(*frontiers))
