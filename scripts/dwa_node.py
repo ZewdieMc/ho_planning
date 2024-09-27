@@ -149,8 +149,6 @@ class DWANode:
             self.control_loop()
             self.action_rate.sleep()
             
-            
-        
         self.reset_robot()
         if success:
             rospy.loginfo('Succeeded')
@@ -297,7 +295,6 @@ class DWANode:
                 if v == 0.0:
                     score = 0
                 
-
                 if score >= 0 or v == 0:
                     scores[i,j] = score
                 else:
@@ -363,14 +360,18 @@ class DWANode:
         #I want to score -999 for points very close to point as well
         else:
             clearance_score = 1
-            #invalid_points = get_invalid_points()
-        
-            # for invalid_point in invalid_points:
-            #     distance = ((invalid_point[0] - point[0])**2 + (invalid_point[1] - point[1])**2)**0.5
-            #     if distance < 2:
-            #         return -999
-                
+            
         return clearance_score
+    
+    def __send_commnd__(self, v, w):
+        cmd = Twist()
+        cmd.linear.x = np.clip(v, -self.v_max, self.v_max)
+        cmd.linear.y = 0
+        cmd.linear.z = 0
+        cmd.angular.x = 0
+        cmd.angular.y = 0
+        cmd.angular.z = np.clip(w, -self.w_max, self.w_max)
+        self.vel_pub.publish(cmd)
 
     def velocity_score(self,point, max_linear_velocity, min_linear_velocity):
         #worst is 0, best is 1
