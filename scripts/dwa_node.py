@@ -20,25 +20,27 @@ from tf2_geometry_msgs import do_transform_point
 
 class DWANode:
     def __init__(self, gridmap_topic, odom_topic):
+        self.tfBuffer = tf2_ros.Buffer()
+        self.tfListener = tf2_ros.TransformListener(self.tfBuffer)
         # Tuning Parameters 
         self.dt = 4.0
-        self.v_max = 0.25 # max linear vel
+        self.v_max = 0.18 # max linear vel
         self.v_min = 0.04 # min linear vel
         self.acc = 2.0 # linear acceleration
 
-        self.w_max = 1.9 # max angular vel
-        self.w_min = 0.1 # min angular vel
-        self.acc_ang = 0.05 # angular acceleration
+        self.w_max = 1.5 # max angular vel
+        self.w_min = 0.05 # min angular vel
+        self.acc_ang = 0.035 # angular acceleration
         # resolutions
-        self.v_res = 0.05
-        self.w_res = 0.05
+        self.v_res = 0.025
+        self.w_res = 0.025
 
         self.goal_heading_bias = 2.0 # 2
-        self.clearance_bias = 1
-        self.velocity_bias = 1
-        self.distance_bias = 1.2 # 1.2
+        # self.clearance_bias = 1
+        self.velocity_bias = 0.8
+        self.distance_bias = 1.2# 1.2
 
-        self.window_size = 1.0 # m 0.5
+        self.window_size = 0.5 # m 0.5
         self.map_update_interval = 0.5
         self.enable_visualization = True
         self.ned = True
@@ -73,8 +75,7 @@ class DWANode:
         self.path_sub = rospy.Subscriber('/turtlebot/kobuki/sensors/rplidar',LaserScan,self.get_closest_obs)
         # self.move_goal_sub = rospy.Subscriber('/waypoints', PoseStamped, self.get_goal)  # Only for testing purposes
 
-        self.tfBuffer = tf2_ros.Buffer()
-        self.tfListener = tf2_ros.TransformListener(self.tfBuffer)
+        
 
 
         # rospy.Timer(rospy.Duration(0.1), self.control_loop)
@@ -239,9 +240,9 @@ class DWANode:
             v,w = self.compute_velocity(self.v_array,self.w_array)
             if self.ned:
                 if w> 0:
-                    w = max(w, 1.0)
+                    w = max(w, 0.6)
                 elif w< 0:
-                    w = min(w, -1.0)
+                    w = min(w, -0.6)
                 self.vel_pub.publish(Twist(Vector3(v,0,0), Vector3(0,0,w)))
                 
                 self.visualize()
@@ -332,16 +333,16 @@ class DWANode:
 
     def dist_score(self, state): 
         score = 0
-        min_distance = 1.5-0.15
+        min_distance = 1.5-0.175
         for obs in self.close_obs_list:
             dist = np.linalg.norm(np.array(state[:2]) - np.array(obs))
             ## if state is too close to obstacle, return -999
-            if dist < 0.2:
+            if dist < 0.175:
                 score =  -999
                 return score
             else:
                 min_distance = min(min_distance, dist)
-        score = (min_distance - 0.2) / (1.5 - 0.2) 
+        score = (min_distance - 0.175) / (1.5 - 0.175) 
         return score
 
 
@@ -379,8 +380,15 @@ class DWANode:
     def update_goal_from_path(self):
         if self.path:
             idx = 0
+            dis_wp = 0
             for i, p in enumerate(self.path):
                 dis = self.distance_to_robot(p)
+                
+                # dis_robot = self.distance_to_robot(p)
+                # if i > 0:
+                #     dis_wp = dis_wp + self.distance_wp(self.path[i-1] , p)
+                # dis = dis_robot + dis_wp
+
                 self.goal = p
                 idx = i
                 if dis > self.window_size:    
@@ -513,6 +521,9 @@ class DWANode:
     ##################################################################
     def distance_to_robot(self,p):
         return np.linalg.norm(np.array(self.current_pose[:2] -p) )
+    
+    def distance_wp(self,p1,p2):
+        return np.linalg.norm(np.array(p1-p2) )
     
     def near_goal(self):
         return np.linalg.norm(np.array(self.current_pose[:2] -self.path[-1]) ) < 0.2

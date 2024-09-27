@@ -1,6 +1,8 @@
 <launch>
     <param name="~frame_id" type="string" value="world_ned" />
-    <include file="$(find turtlebot_simulation)/launch/turtlebot_hoi_circuit2.launch" />
+    <include file="$(find turtlebot_simulation)/launch/turtlebot_integration.launch" />
+    <param name="enable_map" type="string" value="False" />
+
 
     <!-- Octmap server -->
     <!-- <param name="~frame_id" type="string" value="odom" /> -->

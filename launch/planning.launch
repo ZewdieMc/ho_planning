@@ -2,6 +2,7 @@
     <param name="~frame_id" type="string" value="world_ned" />
 
 
+
     <!-- exploration -->
     <node pkg="ho_planning" type="frontier_planner_node.py" name="frontier_planner_node" output="screen"/>
 
@@ -13,5 +14,8 @@
 
     <!-- SM  -->
     <node pkg="ho_planning" type="state_machine.py" name="state_machine_node" output="screen"/> 
+    <node pkg="robot_state_publisher" 
+          type="robot_state_publisher" 
+          name="robot_state_publisher"/>
 
 </launch>

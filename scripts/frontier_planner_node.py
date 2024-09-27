@@ -9,15 +9,14 @@ import math
 from numpy import cos, sin
 from utils.state_validity_checker import StateValidityChecker
 import tf
-from exploration import find_frontiers_conv, cluster_frontiers
 from ho_planning.srv import GetNBVP,  GetNBVPResponse, GetViewPoints, GetViewPointsResponse
 
 class FrontierPlanner:
     def __init__(self, gridmap_topic, odom_topic):
         # Config Parameters 
         self.update_interval = 1 # update frontiers every x seconds
-        self.distance_bias = 5
-        self.frontiers_bias = 5.0
+        self.distance_bias = 8
+        self.frontiers_bias = 0.5
         self.distance_threshold = 0.01
         
         # Class Module
@@ -74,8 +73,8 @@ class FrontierPlanner:
             # Prepare gridmap
             grid_map = self.prepare_grid_map(data)
             # Detect frontiers cells
-            #! self.frontiers, frontiers_map = self.detect_frontiers(grid_map)
-            self.frontiers  = find_frontiers_conv(self.svc.map)
+            self.frontiers, frontiers_map = self.detect_frontiers(grid_map)
+            # self.frontiers  = find_frontiers_conv(self.svc.map)
 
             # Clustering
             self.clusters = self.group_frontiers(self.frontiers)
@@ -104,8 +103,9 @@ class FrontierPlanner:
         self.current_pose = np.array([x,y,yaw])
 
     def executoion_loop(self, _):
-        if self.nbvp and (self.current_vp == None or self.distance_to_viewpoint(self.current_vp) < self.distance_threshold):
-            self.current_vp = self.nbvp
+        if self.nbvp:
+            if self.current_vp is None or self.distance_to_viewpoint(self.current_vp) < self.distance_threshold:
+                self.current_vp = self.nbvp
             
             goal = PoseStamped()
             goal.pose.position.x = self.current_vp[0]
@@ -190,7 +190,7 @@ class FrontierPlanner:
                     visited_map[tuple(current)] = 1
                     if current not in cluster:
                         cluster.append(current)
-                        neighbors = self.get_neighbor_cells(map, current,3)
+                        neighbors = self.get_neighbor_cells(map, current,1)
                         for neighbor in neighbors:
                             if self.is_frontier(neighbor,map) and not self.is_visited(neighbor,visited_map):
                                 stack.append(neighbor)

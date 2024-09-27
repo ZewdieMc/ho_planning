@@ -20,7 +20,7 @@ from utils.global_planner import StateValidityChecker
 import actionlib
 from ho_planning.msg import FollowPathAction, FollowPathGoal, FollowPathResult
 from ho_planning.srv import GetGlobalPlan, GetGlobalPlanRequest, GetGlobalPlanResponse, GetViewPoints, GetViewPointsRequest
-from std_srvs.srv import SetBool, Trigger
+from std_srvs.srv import SetBool, Trigger, TriggerRequest
 
 global black_board
 
@@ -30,7 +30,7 @@ class IDLE(smach.State):
     '''
     def __init__(self):
         global black_board
-        smach.State.__init__(self, outcomes=['goal_recieved','start_exploration','state_end'])
+        smach.State.__init__(self, outcomes=['goal_recieved','start_exploration','start_pickplace','state_end'])
 
     def execute(self, userdata):
         global black_board
@@ -46,6 +46,10 @@ class IDLE(smach.State):
             elif black_board.start_exploration:
                 rospy.loginfo('Exploration trigger received --> start EXPLORATION')
                 return'start_exploration'
+            
+            elif black_board.start_pickplace:
+                rospy.loginfo('PickPlace trigger received --> start PICKPLACE')
+                return'start_pickplace'
             rospy.sleep(1)
 
         return 'state_end'
@@ -57,7 +61,7 @@ class FindPath(smach.State):
     '''
     def __init__(self):
         global black_board
-        smach.State.__init__(self, outcomes=['path_found','plan_fail','preempted'])
+        smach.State.__init__(self, outcomes=['path_found','plan_fail','robot_stuck','preempted'])
         self.retries = 2
 
     def execute(self, userdata):
@@ -65,6 +69,12 @@ class FindPath(smach.State):
         rospy.loginfo('Executing state FIND_PATH')
         black_board.path = None
         black_board.stop_robot()
+
+        # if not black_board.svc.is_valid(black_board.current_pose[:2]):
+        #     rospy.loginfo('Robot is not valid')
+        #     return 'robot_stuck'
+            
+        
 
         # Call global planner service
         for i in range(self.retries): 
@@ -101,12 +111,38 @@ class AdjustHeading(smach.State):
 
         
         return'adjust_success'
+    
+class FindAruco(smach.State):
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['aruco_found','no_aruco','preempted'])
+        
+    
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state FIND ARUCO')
+        black_board.stop_robot()
+        # black_board.find_aruco()
+
+        if black_board.is_prempt_requested:
+                rospy.logerr('Preempt requested')
+                black_board.client.cancel_goal()
+                black_board.stop_robot()
+                black_board.path = None
+                return 'preempted'
+        
+        if black_board.aruco_pose is not None:
+            return 'aruco_found'
+        else:
+            return 'no_aruco'
+
       
     
 class FollowPath(smach.State):
     def __init__(self):
         global black_board
-        smach.State.__init__(self, outcomes=['goal_reached','robot_stuck','invalid_path','preempted'])
+        smach.State.__init__(self, outcomes=['goal_reached','robot_stuck','invalid_path','preempted','pickup_reached','placedown_reached'])
     
 
     def execute(self, userdata):
@@ -130,6 +166,12 @@ class FollowPath(smach.State):
                 black_board.stop_robot()
                 black_board.path = None
                 return 'preempted'
+            
+            if black_board.aruco_pose is not None and not black_board.is_picking:
+                black_board.client.cancel_goal()
+                black_board.stop_robot()
+                black_board.path = None
+                return 'goal_reached'
 
             if black_board.client.get_state() == actionlib.GoalStatus.PREEMPTED :
                 rospy.logerr('Robot Stuck')
@@ -142,6 +184,12 @@ class FollowPath(smach.State):
                 rospy.loginfo('Goal Reached')
                 black_board.stop_robot()
                 black_board.path = None
+
+                if black_board.is_picking:
+                    return 'pickup_reached'
+                elif black_board.is_placing:
+                    return 'placedown_reached'
+                
                 return 'goal_reached'
 
             rospy.sleep(0.5)
@@ -218,6 +266,99 @@ class FindNbvp(smach.State):
                 return 'nbvp_found'
             
         return 'nbvp_fail'
+    
+class FindPickUpSpot(smach.State):
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['spot_found','no_spot','preempted'])
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state FIND_PICKUP')
+        black_board.path = None
+        black_board.goal = None
+        black_board.viewpoints = None
+        black_board.stop_robot()
+
+        black_board.is_picking = True
+        black_board.is_placing = False
+
+        spot = black_board.find_pick_position()
+        # Call nbvp service
+        black_board.goal = spot
+            
+        return 'spot_found'
+    
+class FindPlaceDownSpot(smach.State):
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['spot_found','no_spot','preempted'])
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state FIND_PLACEDOWN')
+        black_board.path = None
+        black_board.goal = None
+        black_board.viewpoints = None
+        black_board.stop_robot()
+
+        black_board.is_picking = False
+        black_board.is_placing = True
+
+        # Call nbvp service
+        black_board.goal = black_board.placedown_goal
+            
+        return 'spot_found'
+    
+class PickUp(smach.State):
+
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['pickup_success','pickup_fail','preempted'])
+        self.retries = 1
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state PICKUP')
+        black_board.stop_robot()
+
+        # Call global planner service
+        for i in range(self.retries): 
+            success = black_board.start_pickup_behavior()
+
+            if black_board.is_prempt_requested:
+                return 'preempted'
+
+            if success:
+                rospy.loginfo('Pickup success')
+                return 'pickup_success'
+            
+        return 'pickup_fail'
+    
+class PlaceDown(smach.State):
+
+    def __init__(self):
+        global black_board
+        smach.State.__init__(self, outcomes=['placedown_success','placedown_fail','preempted'])
+        self.retries = 1
+
+    def execute(self, userdata):
+        global black_board
+        rospy.loginfo('Executing state PICKUP')
+        black_board.stop_robot()
+
+        # Call global planner service
+        for i in range(self.retries): 
+            success = black_board.start_placedown_behavior()
+
+            if black_board.is_prempt_requested:
+                return 'preempted'
+
+            if success:
+                rospy.loginfo('Pickup success')
+                return 'placedown_success'
+            
+        return 'placedown_fail'
         
 
         
@@ -232,17 +373,27 @@ class StateBlackBoard:
         self.viewpoints = None
         self.path = None
         self.current_pose = None
+        self.aruco_pose = None
+        self.aruco_ts = rospy.Time.now()
+
+        self.pickup_goal = np.array([-1, 0])
+        self.placedown_goal = np.array([0, 0])
         
         # Flags
         self.movebase_recieved = False
         self.start_exploration = False
+        self.start_pickplace = False
         self.is_prempt_requested = False
         
+        # status 
+        self.is_picking = False
+        self.is_placing = False
 
         # Grid map
         self.svc = StateValidityChecker(0.2)
         self.current_gridmap = None
         self.last_map_time = rospy.Time.now()
+        self.last_check_time = rospy.Time.now()
 
         # Vel Publisher
         self.vel_pub = rospy.Publisher('/cmd_vel',Twist, queue_size=10)
@@ -259,7 +410,8 @@ class StateBlackBoard:
         #?subscriber to odom_topic  
         self.odom_sub = rospy.Subscriber("/odom", Odometry, self.get_odom)
         # ?subscriber to /move_base_simple/goal published by rviz
-        self.move_goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.get_goal)    
+        self.move_goal_sub = rospy.Subscriber('/move_base_simple/goal', PoseStamped, self.get_goal)   
+        self.aruco_sub = rospy.Subscriber('/aruco_pose', PoseStamped, self.aruco_cb) 
 
         # Preempted Service
         self.stop_srv = rospy.Service('/stop_state_machine', SetBool, self.handle_stop_srv)
@@ -271,6 +423,9 @@ class StateBlackBoard:
 
         # Exploration Service
         rospy.Service("/start_exploration",SetBool, self.handle_start_exploration)
+
+        # PickPlace Service
+        rospy.Service("/start_pickplace",SetBool, self.handle_start_pickplace)
 
         # Visualization
         rospy.Timer(rospy.Duration(2),self.visualization)
@@ -288,6 +443,12 @@ class StateBlackBoard:
         #?Store current position (x, y, yaw) as a np.array in self.current_pose var.
         self.current_pose = np.array([odom.pose.pose.position.x, odom.pose.pose.position.y, yaw])
 
+        # check aruco 
+        if not self.aruco_pose == None:
+            diff = rospy.Time.now() - self.aruco_ts
+            if diff.to_sec() > 2:
+                self.aruco_pose = None
+
     def get_goal(self, msg):
         if self.svc.there_is_map:
             #?Store goal (x,y) as a numpy aray in self.goal var and print it 
@@ -304,7 +465,7 @@ class StateBlackBoard:
     def get_gridmap(self, gridmap):
       
         # To avoid map update too often (change value '1' if necessary)
-        if (gridmap.header.stamp - self.last_map_time).to_sec() > 10:            
+        if (gridmap.header.stamp - self.last_map_time).to_sec() > 3:            
             self.last_map_time = gridmap.header.stamp
 
             self.current_gridmap = gridmap
@@ -318,10 +479,15 @@ class StateBlackBoard:
 
             self.bounds = [origin[0] - 0.5 , origin[0] + map_height + 0.5  , origin[1] - 0.5 , origin[1] + map_width + 0.5 ]
             
-            # if self.path is not None:
-            #     if not self.svc.check_path(self.path):
-            #         rospy.logerr("Path not valid anymore")
-            #         self.path = None 
+            if self.path is not None and (gridmap.header.stamp - self.last_check_time).to_sec() > 20:
+                self.last_check_time = gridmap.header.stamp
+                if not self.svc.check_path(self.path):
+                    rospy.logerr("Path not valid anymore")
+                    self.path = None 
+
+    def aruco_cb(self, msg):
+        self.aruco_pose = [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z]
+        self.aruco_ts = rospy.Time.now()
 
     def handle_stop_srv(self,req):
         rospy.logwarn("Stop stat machine triggered")
@@ -330,6 +496,9 @@ class StateBlackBoard:
 
     def handle_start_exploration(self,req):
         self.start_exploration = True
+
+    def handle_start_pickplace(self,req):
+        self.start_pickplace = True
 
     ###############################
     ### Service caller
@@ -379,6 +548,36 @@ class StateBlackBoard:
         except rospy.ServiceException as e:
             print(f"Service call failed: {e}")
             return None
+        
+    def start_pickup_behavior(self):
+        rospy.logwarn("Calling pickup")
+        rospy.wait_for_service('start_pickup')
+        viewpoints = []
+        try:
+            pickup = rospy.ServiceProxy('start_pickup', Trigger)
+            req = TriggerRequest()
+        
+
+            resp = pickup(req)
+            return resp
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+            return False
+        
+    def start_placedown_behavior(self):
+        rospy.logwarn("Calling placedown")
+        rospy.wait_for_service('start_placedown')
+        viewpoints = []
+        try:
+            placedown = rospy.ServiceProxy('start_placedown', Trigger)
+            req = TriggerRequest()
+        
+
+            resp = placedown(req)
+            return resp
+        except rospy.ServiceException as e:
+            print(f"Service call failed: {e}")
+            return False
 
 
     ###############################
@@ -440,8 +639,49 @@ class StateBlackBoard:
             self.vel_pub.publish(cmd)
 
             
+    def find_aruco(self):
+        cmd = Twist()
+        
+        current_heading = self.current_pose[2]
+        res = 10
+        ang =2* np.pi / res
+        heading_list = []
+        
+        # create heading list to stop and see aruco
+        for i in range(res):
+            heading_list.append(current_heading + (ang* (i+1)))
+        print(heading_list)
+        print(self.aruco_pose)
+
+        while heading_list != []:
+            if self.aruco_pose is not None:
+                   
+                    break 
+            psi = wrap_angle(heading_list[0] - self.current_pose[2])
+            cmd.angular.z = psi/abs(psi) * 1.0
+            self.vel_pub.publish(cmd)
+            if abs(psi) < 0.08:
+                heading_list.pop(0)
+                self.stop_robot()
+                rospy.sleep(2)
+                if self.aruco_pose is not None:
+                   
+                    break
+        
+        self.stop_robot()
+
             
-         
+    def find_pick_position(self):
+        aruco_pose = self.aruco_pose[:2]
+        current_pose = self.current_pose[:2]
+        dis = 0.6
+        psi_d = np.arctan2(current_pose[1] - aruco_pose[1], current_pose[0] - aruco_pose[0])
+        dx = dis * np.cos(psi_d)
+        dy = dis * np.sin(psi_d)
+
+        pick_pos = [aruco_pose[0] + dx, aruco_pose[1] + dy]
+        return pick_pos
+
         
 
     ###############################
@@ -450,7 +690,10 @@ class StateBlackBoard:
     def reset_flags(self):
         self.movebase_recieved = False
         self.start_exploration = False
+        self.start_pickplace = False
         self.is_prempt_requested = False
+        self.is_picking = False
+        self.is_placing = False
 
     def discretize_path(self,path):
         result_path = Path()
@@ -572,30 +815,36 @@ def main():
         smach.StateMachine.add('IDLE', IDLE(), 
                                transitions={'goal_recieved':'MOVEBASE', 
                                             'start_exploration':'EXPLORATION',
+                                            'start_pickplace':'FIND_PICKUP',
                                             'state_end':'state_end'})
-        movebase_sm = smach.StateMachine(outcomes=['movebase_end'])
+        movebase_sm = smach.StateMachine(outcomes=['movebase_end', 'pickup_reached', 'placedown_reached'])
         with movebase_sm:
             smach.StateMachine.add('FIND_PATH', FindPath(), 
                                transitions={'path_found':'ADJUST_HEADING', 
                                             'plan_fail':'movebase_end',
-                                            'preempted':'movebase_end' })
+                                            'preempted':'movebase_end' ,
+                                            "robot_stuck":"RECOVERING"})
             smach.StateMachine.add('ADJUST_HEADING', AdjustHeading(), 
                                transitions={'adjust_success':'FOLLOW_PATH', 
                                             'preempted':'movebase_end'})
             smach.StateMachine.add('FOLLOW_PATH', FollowPath(), 
-                               transitions={'goal_reached':'movebase_end', 
+                               transitions={'goal_reached':'movebase_end',
                                             'robot_stuck':'RECOVERING',
                                             'invalid_path':'FIND_PATH',
-                                            'preempted':'movebase_end'})
+                                            'preempted':'movebase_end',
+                                            'pickup_reached':'pickup_reached',
+                                            'placedown_reached':'placedown_reached'})
             smach.StateMachine.add('RECOVERING', Recovering(), 
                                transitions={'recover_success':'FIND_PATH', 
                                             'recover_fail':'movebase_end',
                                             'preempted':'movebase_end'})
             
 
-        explo_sm = smach.StateMachine(outcomes=['explo_end'])
+        explo_sm = smach.StateMachine(outcomes=['explo_end','aruco_found'])
         
         with explo_sm:
+            
+            
             smach.StateMachine.add('FIND_NBVP', FindNbvp(), 
                                transitions={'nbvp_found':'FIND_PATH', 
                                             'nbvp_fail':'explo_end',
@@ -603,24 +852,53 @@ def main():
             smach.StateMachine.add('FIND_PATH', FindPath(), 
                                transitions={'path_found':'ADJUST_HEADING', 
                                             'plan_fail':'FIND_NBVP',
-                                            'preempted':'explo_end' })
+                                            'preempted':'explo_end' ,
+                                            "robot_stuck":"RECOVERING"})
             smach.StateMachine.add('ADJUST_HEADING', AdjustHeading(), 
                                transitions={'adjust_success':'FOLLOW_PATH', 
                                             'preempted':'explo_end'})
             smach.StateMachine.add('FOLLOW_PATH', FollowPath(), 
-                               transitions={'goal_reached':'FIND_NBVP', 
+                               transitions={'goal_reached':'FIND_ARUCO', 
                                             'robot_stuck':'RECOVERING',
                                             'invalid_path':'FIND_PATH',
+                                            'preempted':'explo_end',
+                                            'pickup_reached':'explo_end',
+                                            'placedown_reached':'explo_end'})
+            smach.StateMachine.add('FIND_ARUCO', FindAruco(), 
+                               transitions={'aruco_found':'aruco_found', 
+                                            'no_aruco':'FIND_NBVP',
                                             'preempted':'explo_end'})
+            
             smach.StateMachine.add('RECOVERING', Recovering(), 
                                transitions={'recover_success':'FIND_NBVP', 
                                             'recover_fail':'explo_end',
                                             'preempted':'explo_end'})
             
+            
         smach.StateMachine.add('MOVEBASE', movebase_sm, 
-                               transitions={'movebase_end':'IDLE'})
+                               transitions={'movebase_end':'IDLE',
+                                            'pickup_reached':'PICKUP',
+                                            'placedown_reached':'PLACEDOWN'})
         smach.StateMachine.add('EXPLORATION', explo_sm, 
-                               transitions={'explo_end':'IDLE'})
+                               transitions={'explo_end':'IDLE',
+                                            'aruco_found':'FIND_PICKUP'})
+        
+        smach.StateMachine.add('FIND_PICKUP', FindPickUpSpot(), 
+                               transitions={'spot_found':'MOVEBASE', 
+                                            'no_spot':'IDLE',
+                                            'preempted':'IDLE'})
+        smach.StateMachine.add('PICKUP', PickUp(), 
+                               transitions={'pickup_success':'FIND_PLACEDOWN', 
+                                            'pickup_fail':'IDLE',
+                                            'preempted':'IDLE'})
+        smach.StateMachine.add('FIND_PLACEDOWN', FindPlaceDownSpot(), 
+                               transitions={'spot_found':'MOVEBASE', 
+                                            'no_spot':'IDLE',
+                                            'preempted':'IDLE'})
+        smach.StateMachine.add('PLACEDOWN', PlaceDown(), 
+                               transitions={'placedown_success':'EXPLORATION', 
+                                            'placedown_fail':'EXPLORATION',
+                                            'preempted':'IDLE'})
             
 
     # Execute SMACH plan
